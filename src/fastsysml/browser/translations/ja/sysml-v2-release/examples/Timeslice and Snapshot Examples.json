@@ -1,0 +1,17 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Timeslice and Snapshot Examples (EPL-2.0)",
+  "files": ["sysml/src/examples/Timeslice and Snapshot Examples/*.sysml"],
+  "names": {
+    "done": "終了",
+    "elapseTime": "経過時間",
+    "portionOfLife": "生存期間の一部",
+    "PwrCmd": "電力指令",
+    "pwrCmd": "電力指令",
+    "pwrLevel": "電力レベル",
+    "start": "開始",
+    "startTime": "開始時刻",
+    "TimeVaryingAttribute": "時間変化する属性",
+    "Transport2": "輸送2",
+    "transportPeriod": "輸送期間"
+  }
+}

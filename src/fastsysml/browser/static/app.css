@@ -230,6 +230,8 @@ table.rows td.num { text-align: right; font-variant-numeric: tabular-nums; }
 a.chip:hover { text-decoration: none; background: var(--bg-hover); }
 .detail-title { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
 .detail-title h2 { margin: 0; font-size: 20px; word-break: break-word; }
+.detail-title .original { color: var(--text-soft); font-size: 14px; }
+.original-doc summary { color: var(--text-soft); cursor: pointer; font-size: 12px; margin-bottom: 4px; }
 .crumbs { color: var(--text-soft); font-size: 13px; word-break: break-word; }
 .crumbs .sep { margin: 0 4px; }
 .actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }

@@ -154,7 +154,23 @@ python -m fastsysml browse Vehicle.sysml          # 複数のファイルも指�
   - ライブラリの要素は、開いたときにブリッジから取得します。
 - **URL**：選んだ要素と検索条件は URL に入るので、ブラウザの戻る・進む、リンクの共有、ブックマークができます。
 
-オプションは、`--port`（0 なら空いているポート）、`--no-open`（ブラウザを開かない）、`--no-validate`、`--mode` です。Python から使うときは、`fastsysml.browser.server.serve(workspace)` を呼びます。
+オプションは、`--port`（0 なら空いているポート）、`--no-open`（ブラウザを開かない）、`--no-validate`、`--mode`、`--lang`（下の「訳を重ねて表示する」）です。Python から使うときは、`fastsysml.browser.server.serve(workspace)` を呼びます。
+
+### 訳を重ねて表示する
+
+```bash
+python -m fastsysml browse Vehicle.sysml --lang ja
+```
+
+`--lang ja`（Python からは `Workspace(language="ja")`）を指定すると、名前・ドキュメント・メタクラス・辺の種類を日本語で表示します。
+
+- モデルのファイルは変えません。名前は識別子として参照されているからです。訳は表示するときに重ねます。
+- 画面には元の名前も出ます。「原文（英語）で表示」ボタンで切り替えられます。
+- 検索は、元の名前と訳のどちらでも当たります。
+- 訳は `src/fastsysml/browser/translations/<言語>/` にあります。
+  - `glossary.json`：メタクラスと辺の種類の訳語です。`XDefinition` は「X定義」、`XUsage` は「X」としています（テキスト記法の `part def` と `part` に合わせています）。
+  - それ以外の JSON ファイル：モデルの辞書です。`files`（どのファイルに使うか。パスの末尾と照合します）、`names`（宣言された名前ごと）、`qualifiedNames`（その要素だけ）、`texts`（ドキュメントとコメント。空白の違いは無視します）を持ちます。フィーチャーの連鎖（`a.b`）は名前ごとに訳します。
+- 同梱している訳は、SysML v2 Release（2026-08）の `sysml/src/examples` の22フォルダ分です。記号や略語（`x`、`v_out`、`APIS` など）は訳していません。
 
 ### Python から使う
 
@@ -264,4 +280,5 @@ uv run python bench.py parse     # SYSML_V2_RELEASE に SysML-v2-Release のク�
 - このリポジトリは [Eclipse Public License 2.0](LICENSE) で公開しています。
 - `java/patches` と、そこからコンパイルした `src/fastsysml/java/patched` は、SysML v2 Pilot Implementation（EPL-2.0、© 各著作権者）のソースに変更を加えたものです。
 - 初回の実行時に取得する jar と標準ライブラリは、conda-forge が配布する Jupyter SysML カーネルのパッケージに含まれているものです。このリポジトリには含めていません。jar に含まれる各コンポーネントは、それぞれのライセンス（EPL-2.0、Apache-2.0 など）に従います。
-- このプロジェクトは OMG や Systems Modeling Community とは関係のない、非公式のものです。
+- `src/fastsysml/browser/translations/ja/sysml-v2-release` の訳は、[SysML v2 Release](https://github.com/Systems-Modeling/SysML-v2-Release)（2026-08）のモデルの名前とドキュメントを日本語に訳したもので、元のモデルと同じく EPL-2.0 です。元のモデルの著作権者は、SysML v2 Release の README に挙げられている California Institute of Technology (Jet Propulsion Laboratory)、DEKonsult、IncQuery Labs Ltd.、Intercax LLC、Itemis、Mgnite Inc.、Model Driven Solutions, Inc.、SAF Consulting、Siemens AG、Twingineer LLC です。
+- SysML は OMG の商標です。このプロジェクトは OMG や Systems Modeling Community とは関係のない、非公式のものです。

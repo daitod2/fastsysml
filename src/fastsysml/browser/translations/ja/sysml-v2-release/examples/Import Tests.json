@@ -1,0 +1,16 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Import Tests (EPL-2.0)",
+  "files": ["sysml/src/examples/Import Tests/*.sysml"],
+  "names": {
+    "AliasImport": "別名のインポート",
+    "CircularImport": "循環インポート",
+    "Definitions": "定義群",
+    "PrivateImportTest": "非公開インポートのテスト",
+    "QualifiedNameImportTest": "修飾名インポートのテスト",
+    "Test1": "テスト1",
+    "Test2": "テスト2",
+    "Usages": "使用",
+    "Vehicle": "車両",
+    "vehicle": "車両"
+  }
+}

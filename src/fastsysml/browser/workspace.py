@@ -10,6 +10,7 @@ from .. import SysMLParser
 from ..model import Issue, Model
 from .graph import SPECIALIZATION_KINDS, Edge, Graph, Node
 from .search import SearchIndex
+from .translation import Translator
 
 # Derived properties got for each element: its effective name (e.g. of `:>> mass`) and qualified name.
 DERIVED = ("name", "qualifiedName")
@@ -30,11 +31,14 @@ class Workspace:
                 print(edge.kind, edge.source.label)
     """
 
-    def __init__(self, parser: Optional[SysMLParser] = None, **parser_options: Any):
+    def __init__(self, parser: Optional[SysMLParser] = None, language: Optional[str] = None,
+                 **parser_options: Any):
+        """language: show the translations of this language (see translation.py), e.g. "ja"."""
         self._owns_parser = parser is None
+        self.translator = Translator(language) if language else None
         self.parser = parser if parser is not None else SysMLParser(**parser_options)
         self.graph = Graph(self.parser.metaclasses())
-        self.index = SearchIndex(self.graph)
+        self.index = SearchIndex(self.graph, self.translator)
         self.models: List[Model] = []
         self.paths: List[str] = []
 
@@ -61,7 +65,7 @@ class Workspace:
         self.parser.unload()
         self.graph = Graph(self.parser.metaclasses())
         self.index.close()
-        self.index = SearchIndex(self.graph)
+        self.index = SearchIndex(self.graph, self.translator)
         self.models, self.paths = [], []
         return self.load(paths, validate=validate)
 

@@ -63,8 +63,8 @@ class ServerTest(unittest.TestCase):
         # The usages of Engine, by the kind of edge.
         self.assertEqual(self.get("/api/search", q='typing:"P::Engine"')["total"], 2)
         csv = self.get("/api/search.csv", q="metaclass:PartDefinition")
-        self.assertTrue(csv.startswith("qualifiedName,label,metaclass"))
-        self.assertIn("P::Engine,Engine,PartDefinition", csv)
+        self.assertTrue(csv.startswith("qualifiedName,label,original,metaclass"))
+        self.assertIn("P::Engine,Engine,,PartDefinition", csv)
 
     def test_node(self):
         detail = self.get("/api/node", key=self.key("metaclass:PartDefinition name:Engine"))

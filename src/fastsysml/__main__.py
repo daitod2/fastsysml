@@ -27,6 +27,7 @@ def main(argv=None) -> int:
     browse.add_argument("--no-open", dest="open", action="store_false", help="do not open a web browser")
     browse.add_argument("--no-validate", dest="validate", action="store_false", help="do not run the validation")
     browse.add_argument("--mode", choices=("patched", "userside", "plain"), default="patched")
+    browse.add_argument("--lang", help="show the translations of this language (e.g. ja), switchable on the page")
     args = parser.parse_args(argv)
 
     if args.command == "install":
@@ -46,7 +47,7 @@ def main(argv=None) -> int:
     elif args.command == "browse":
         from .browser import Workspace
         from .browser.server import serve
-        with Workspace(mode=args.mode) as workspace:
+        with Workspace(mode=args.mode, language=args.lang) as workspace:
             print(f"Loading {len(args.files)} file(s)...", flush=True)
             workspace.load(args.files, validate=args.validate)
             serve(workspace, args.port, args.open)

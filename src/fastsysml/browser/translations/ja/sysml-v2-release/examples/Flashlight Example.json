@@ -1,0 +1,28 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Flashlight Example (EPL-2.0)",
+  "files": ["sysml/src/examples/Flashlight Example/*.sysml"],
+  "names": {
+    "context": "コンテキスト",
+    "flashlight": "懐中電灯",
+    "Flashlight Example": "懐中電灯の例",
+    "illuminateRegion": "領域を照らす",
+    "Light": "光",
+    "light": "光",
+    "lightFlow": "光の流れ",
+    "LightPort": "光ポート",
+    "lightPort": "光ポート",
+    "OnOffCmd": "オンオフ指令",
+    "onOffCmd": "オンオフ指令",
+    "onOffCmdFlow": "オンオフ指令の流れ",
+    "OnOffCmdPort": "オンオフ指令ポート",
+    "onOffCmdPort": "オンオフ指令ポート",
+    "produceDirectedLight": "指向性の光を出す",
+    "reflectingSource": "反射源",
+    "reflectLight": "光を反射する",
+    "sendOnOffCmd": "オンオフ指令を送る",
+    "user": "利用者",
+    "userToFlashlight": "利用者から懐中電灯へ",
+    "~LightPort": "~光ポート",
+    "~OnOffCmdPort": "~オンオフ指令ポート"
+  }
+}

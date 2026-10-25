@@ -1,0 +1,17 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Camera Example (EPL-2.0)",
+  "files": ["sysml/src/examples/Camera Example/*.sysml"],
+  "names": {
+    "Camera": "カメラ",
+    "Exposure": "露出",
+    "focus": "焦点合わせ",
+    "Focus": "焦点合わせ",
+    "focusingSubsystem": "焦点合わせサブシステム",
+    "imagingSubsystem": "撮像サブシステム",
+    "payload": "ペイロード",
+    "PictureTaking": "写真撮影",
+    "shoot": "撮影",
+    "Shoot": "撮影",
+    "takePicture": "写真を撮る"
+  }
+}

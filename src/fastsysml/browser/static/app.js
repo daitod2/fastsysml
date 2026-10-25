@@ -7,7 +7,7 @@
 // they are (see term()).
 const TERMS = {
   columns: {
-    label: "名前", metaclass: "メタクラス", owner: "所有者", typing: "型", subclassification: "特化元",
+    label: "名前", original: "元の名前", metaclass: "メタクラス", owner: "所有者", typing: "型", subclassification: "特化元",
     redefinition: "再定義", subsetting: "部分集合", reference: "参照", usages: "使用数", multiplicity: "多重度",
     value: "値", doc: "ドキュメント", file: "ファイル", line: "行",
   },
@@ -17,9 +17,14 @@ const TERMS = {
   },
 };
 
-// A metaclass or edge kind for display (to be replaced by the glossary).
+// The language shown ("en": the originals; else that of the translations of the server) and its glossary.
+let lang = "en";
+let glossary = {};
+
+// A metaclass or edge kind for display.
 function term(name) {
-  return name;
+  if (name == null) return name;
+  return (glossary.metaclasses || {})[name] || (glossary.edges || {})[name] || name;
 }
 
 const $ = (selector) => document.querySelector(selector);
@@ -42,6 +47,7 @@ function h(tag, attrs, ...children) {
 async function api(path, params, method) {
   const url = new URL(path, location.href);
   for (const [name, value] of Object.entries(params || {})) url.searchParams.set(name, value);
+  if (!url.searchParams.has("lang")) url.searchParams.set("lang", lang);
   const response = await fetch(url, { method: method || "GET" });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || response.statusText);
@@ -50,7 +56,8 @@ async function api(path, params, method) {
 
 // State and navigation
 
-let current = { q: null, e: null, v: null };
+// What is shown (undefined: nothing yet, so that it is loaded whatever the URL says).
+let current = { q: undefined, e: undefined, v: undefined };
 let typing = false; // Whether the search box was edited since the last navigation (then edits replace it).
 
 function readHash() {
@@ -76,8 +83,8 @@ function navigate(changes, replace) {
 // A link to an element (keeping the query and view).
 function link(node, text) {
   if (!node) return h("span", { class: "error-text" }, text || "?");
-  const a = h("a", { href: hashOf(Object.assign({}, current, { e: node.key })), title: node.qualifiedName || "" },
-              text || node.label);
+  const title = [node.original, node.qualifiedName].filter(Boolean).join("\n");
+  const a = h("a", { href: hashOf(Object.assign({}, current, { e: node.key })), title }, text || node.label);
   a.addEventListener("click", (event) => {
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
     event.preventDefault();
@@ -111,11 +118,15 @@ async function route() {
 
 async function loadInfo() {
   const info = await api("api/info");
+  const button = $("#lang-button");
+  button.hidden = !info.language;
+  button.textContent = lang === "en" ? "日本語で表示" : "原文（英語）で表示";
+  button.dataset.language = info.language || "";
   $("#status").textContent = `ファイル ${info.files.length}・要素 ${info.nodes}・関係 ${info.edges}`;
   $("#status").title = info.files.join("\n");
-  const button = $("#issues-button");
-  button.textContent = info.issues ? `エラー ${info.errors}・指摘 ${info.issues - info.errors}` : "指摘なし";
-  button.classList.toggle("has-errors", info.errors > 0);
+  const issues = $("#issues-button");
+  issues.textContent = info.issues ? `エラー ${info.errors}・指摘 ${info.issues - info.errors}` : "指摘なし";
+  issues.classList.toggle("has-errors", info.errors > 0);
 }
 
 function renderHelp() {
@@ -159,7 +170,7 @@ function renderTypes() {
       items.map((item) => {
         const itemQuery = `metaclass:${item.metaclass}`;
         return h("div", { class: "facet" + (current.q === itemQuery ? " active" : ""), onclick: () => query(itemQuery),
-                          title: itemQuery },
+                          title: `${item.metaclass}\n${itemQuery}` },
           h("span", null, term(item.metaclass)), h("span", { class: "count" }, item.count));
       })));
   }
@@ -190,7 +201,8 @@ async function renderTree() {
         renderTree();
       });
       rows.push(h("div", { class: "tree-row" + (node.key === current.e ? " selected" : ""), "data-key": node.key,
-                           style: `padding-left:${8 + depth * 14}px`, title: `${node.label}（${term(node.metaclass)}）`,
+                           style: `padding-left:${8 + depth * 14}px`,
+                           title: [node.label, node.original, term(node.metaclass)].filter(Boolean).join("\n"),
                            onclick: () => navigate({ e: node.key }) },
         toggle, h("span", { class: "tree-label" }, node.label)));
       if (expanded && tree.children.has(node.key)) add(tree.children.get(node.key), depth + 1);
@@ -426,6 +438,7 @@ function renderDetail(detail) {
     if (value != null && value !== "" && !(Array.isArray(value) && !value.length)) props.push([name, value]);
   };
   prop("修飾名", detail.qualifiedName);
+  prop("元の名前", detail.original);
   prop("短い名前", detail.shortName);
   prop("メンバーシップ", detail.membership && term(detail.membership));
   prop("多重度", detail.multiplicity && h("code", null, detail.multiplicity));
@@ -438,7 +451,8 @@ function renderDetail(detail) {
     detail.ancestors.map((ancestor, i) => [i ? h("span", { class: "sep" }, "›") : null, link(ancestor)])) : null;
   const actions = h("div", { class: "actions" },
     detail.metaclass ? h("button", { type: "button", onclick: () => query(`metaclass:${detail.metaclass}`) },
-      `${term(detail.metaclass)} の一覧`) : null,
+      /^[\x20-\x7e]*$/.test(term(detail.metaclass)) ? `${term(detail.metaclass)} の一覧` : `${term(detail.metaclass)}の一覧`)
+      : null,
     detail.qualifiedName && detail.childCount ?
       h("button", { type: "button", onclick: () => query(`in:"${detail.qualifiedName}"`) }, "中の要素を一覧") : null);
 
@@ -449,13 +463,16 @@ function renderDetail(detail) {
   $("#detail").replaceChildren(h("div", { class: "detail" },
     crumbs,
     h("div", { class: "detail-title" }, h("h2", null, detail.label),
+      detail.original ? h("span", { class: "original", title: "元の名前" }, detail.original) : null,
       detail.metaclass ? chip(term(detail.metaclass), () => query(`metaclass:${detail.metaclass}`)) : null,
       detail.stub ? chip("未読み込み") : null),
     actions,
     detail.issues.length ? section("指摘", detail.issues.length, h("ul", { class: "links" }, detail.issues.map(
       (issue) => h("li", { class: issue.severity === "error" ? "error-text" : "warning-text" },
                    `${issue.line}:${issue.column} ${issue.message}`)))) : null,
-    detail.doc.length ? section("ドキュメント", null, detail.doc.map((doc) => h("p", { class: "doc" }, doc))) : null,
+    detail.doc.length ? section("ドキュメント", null, detail.doc.map((doc) => h("p", { class: "doc" }, doc)),
+      detail.docOriginal ? h("details", { class: "original-doc" }, h("summary", null, "原文"),
+        detail.docOriginal.map((doc) => h("p", { class: "doc" }, doc))) : null) : null,
     section("基本", null, h("table", { class: "props" }, props.map(([name, value]) =>
       h("tr", null, h("th", null, name), h("td", null, value))))),
     detail.out.length ? section("出ていく関係", detail.out.length, edgeList(detail.out, false, detail)) : null,
@@ -505,10 +522,7 @@ function setup() {
     $("#reload").disabled = true;
     try {
       await api("api/reload", null, "POST");
-      tree.children.clear();
-      current = { q: null, e: null, v: null };
-      await Promise.all([loadInfo(), loadTypes()]);
-      route();
+      await setLanguage(lang);
     } finally {
       $("#reload").disabled = false;
     }
@@ -523,10 +537,36 @@ function setup() {
     });
   }
   window.addEventListener("popstate", () => { typing = false; route(); });
+  $("#lang-button").addEventListener("click", () => {
+    setLanguage(lang === "en" ? $("#lang-button").dataset.language : "en");
+  });
   renderHelp();
-  loadInfo();
-  loadTypes();
+  start();
+}
+
+async function start() {
+  const info = await api("api/info", { lang: "en" });
+  let stored = null;
+  try { stored = localStorage.getItem("sysml-browser-lang"); } catch (error) { /* (No storage.) */ }
+  lang = info.language && stored !== "en" ? info.language : "en";
+  await setLanguage(lang);
+}
+
+let languageRequest = 0;
+
+// Shows a language (reloading what is shown).
+async function setLanguage(language) {
+  const request = ++languageRequest;
+  const terms = language === "en" ? {} : await api("api/glossary", { lang: language });
+  if (request !== languageRequest) return; // (Switched again meanwhile.)
+  lang = language;
+  glossary = terms;
+  try { localStorage.setItem("sysml-browser-lang", lang); } catch (error) { /* (No storage.) */ }
+  tree.children.clear();
+  current = { q: undefined, e: undefined, v: undefined };
+  await Promise.all([loadInfo(), loadTypes()]);
   route();
+  renderTree();
 }
 
 setup();

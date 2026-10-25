@@ -1,0 +1,27 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Packet Example (EPL-2.0)",
+  "files": ["sysml/src/examples/Packet Example/*.sysml"],
+  "names": {
+    "Data Packet": "データパケット",
+    "packet data field": "パケットデータフィールド",
+    "packet data length": "パケットデータ長",
+    "packet header": "パケットヘッダー",
+    "packet identification": "パケット識別",
+    "packet primary header": "パケット一次ヘッダー",
+    "packet secondary header": "パケット二次ヘッダー",
+    "packet timestamp": "パケットのタイムスタンプ",
+    "Packet Usage": "パケットの使用",
+    "packet version number": "パケットのバージョン番号",
+    "packet1": "パケット1",
+    "packet2": "パケット2",
+    "packet3": "パケット3",
+    "Packets": "パケット",
+    "special data": "特殊データ",
+    "special data field": "特殊データフィールド",
+    "telemetry packet type": "テレメトリーパケットの種類",
+    "temperature": "温度",
+    "Thermal Data Packet": "熱データパケット",
+    "timestamp": "タイムスタンプ",
+    "user data field": "ユーザーデータフィールド"
+  }
+}

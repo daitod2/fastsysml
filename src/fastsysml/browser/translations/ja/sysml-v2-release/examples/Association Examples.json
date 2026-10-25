@@ -1,0 +1,30 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Association Examples (EPL-2.0)",
+  "files": ["sysml/src/examples/Association Examples/*.sysml"],
+  "names": {
+    "Account": "アカウント",
+    "account": "アカウント",
+    "cart": "カート",
+    "inCart": "カート内",
+    "inCart1": "カート内1",
+    "info": "情報",
+    "info1": "情報1",
+    "myCart": "自分のカート",
+    "OnlineCustomer": "オンライン顧客",
+    "Product": "商品",
+    "products": "商品群",
+    "ProductSelection": "商品選択",
+    "ProductSelection1": "商品選択1",
+    "ProductSelection_N_ary_SysML": "商品選択_N項_SysML",
+    "ProductSelection_OwnedEnds_SysML": "商品選択_所有端_SysML",
+    "ProductSelection_UnownedEnds_SysML": "商品選択_非所有端_SysML",
+    "selectedProduct": "選択された商品",
+    "selectedProduct1": "選択された商品1",
+    "selectedProducts": "選択された商品群",
+    "SelectionInfo": "選択情報",
+    "ShoppingCart": "ショッピングカート",
+    "SingleProductSelection": "単一商品選択",
+    "SingleProductSelection1": "単一商品選択1",
+    "withAccount": "アカウント付き"
+  }
+}

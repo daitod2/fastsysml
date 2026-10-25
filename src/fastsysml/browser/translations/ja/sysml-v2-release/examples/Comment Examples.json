@@ -1,0 +1,19 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/examples/Comment Examples (EPL-2.0)",
+  "files": ["sysml/src/examples/Comment Examples/*.sysml"],
+  "names": {
+    "cmt": "コメント",
+    "cmt_cmt": "コメントへのコメント",
+    "Comments": "コメント"
+  },
+  "texts": {
+    "Documentation Comment": "ドキュメントのコメント",
+    "Documentation about Package": "パッケージについてのドキュメント",
+    "Named Comment": "名前付きのコメント",
+    "Comment about Comment": "コメントについてのコメント",
+    "Documention Comment on Part Def": "パート定義へのドキュメントのコメント",
+    "Documentation in Part Def": "パート定義の中のドキュメント",
+    "Comment in Part Def": "パート定義の中のコメント",
+    "Comment about Package": "パッケージについてのコメント"
+  }
+}

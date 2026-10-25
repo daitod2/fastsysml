@@ -2,8 +2,9 @@
 
     python -m fastsysml browse Vehicle.sysml [--port 8765]
 
-API (GET, except reload):
-  /api/info                 the files loaded, counts and issues
+API (GET, except reload; with lang=en, without the translations of the workspace, if any):
+  /api/info                 the files loaded, counts, issues and the language of the translations
+  /api/glossary             the glossary of the translations (metaclasses and edge kinds), if any
   /api/types                the metaclasses of the nodes, with counts
   /api/search?q=...         the rows of the nodes matching a query (see SearchIndex.search), at most `limit`
   /api/search.csv?q=...     the same rows as CSV
@@ -12,7 +13,8 @@ API (GET, except reload):
   /api/children?key=...     the children of a node (without key: the roots of the files)
   /api/issues               all the issues, with their nodes
   POST /api/reload          loads the files again
-It listens on localhost only.
+It listens on localhost only. With translations, labels and texts are translated, with the original as
+"original" (and "docOriginal").
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .graph import Edge, Node
+from .translation import Translator
 from .workspace import Workspace
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -38,7 +41,7 @@ _STATIC_FILES = {"/": "index.html", "/index.html": "index.html", "/app.js": "app
 # Groups of metaclasses, for the list of metaclasses (the first one that a metaclass is a subclass of).
 GROUPS = ("Package", "Definition", "Usage", "Relationship", "AnnotatingElement", "Element")
 # The columns of the rows (in this order); the page shows those with values.
-COLUMNS = ("label", "metaclass", "owner", "typing", "subclassification", "redefinition", "subsetting",
+COLUMNS = ("label", "original", "metaclass", "owner", "typing", "subclassification", "redefinition", "subsetting",
            "reference", "usages", "multiplicity", "value", "doc", "file", "line")
 MAX_ROWS = 5000
 MAX_CHILDREN = 1000
@@ -50,13 +53,20 @@ class BrowserApp:
     def __init__(self, workspace: Workspace):
         self.ws = workspace
         self.lock = threading.RLock()
+        # The translator of the request (that of the workspace, unless the request asks for another language).
+        self.tr: Optional[Translator] = None
 
     # Requests
 
     def get(self, path: str, params: Dict[str, str]) -> Tuple[int, str, bytes]:
         with self.lock:
+            translator = self.ws.translator
+            wanted = params.get("lang", translator.language if translator is not None else None)
+            self.tr = translator if translator is not None and wanted == translator.language else None
             if path == "/api/info":
                 return _json(self.info())
+            if path == "/api/glossary":
+                return _json(self.tr.glossary if self.tr is not None else {})
             if path == "/api/types":
                 return _json(self.types())
             if path in ("/api/search", "/api/search.csv"):
@@ -99,7 +109,8 @@ class BrowserApp:
         issues = self.ws.issues
         return {"files": [_file_name(root.model_uri) for root in self.ws.roots], "nodes": len(nodes),
                 "stubs": len(self.ws.graph.nodes) - len(nodes), "edges": len(self.ws.graph.edges),
-                "errors": sum(1 for issue in issues if issue.severity == "error"), "issues": len(issues)}
+                "errors": sum(1 for issue in issues if issue.severity == "error"), "issues": len(issues),
+                "language": self.ws.translator.language if self.ws.translator is not None else None}
 
     def types(self) -> List[Dict[str, Any]]:
         counts: Dict[str, int] = {}
@@ -130,24 +141,40 @@ class BrowserApp:
             return None
         return self.ws.graph.node(model.elements[issue.element_id].uri)
 
+    # Translations (the original without a translator)
+
+    def _label(self, node: Node) -> str:
+        return self.tr.label(node) if self.tr is not None else node.label
+
+    def _docs(self, node: Node) -> List[str]:
+        return [self.tr.text(node, doc) for doc in node.doc] if self.tr is not None else node.doc
+
+    def _target_label(self, edge: Edge) -> str:
+        return self.tr.target_label(edge) if self.tr is not None else edge.target_label
+
     def summary(self, node: Node, children: bool = False) -> Dict[str, Any]:
-        result = {"key": node.key, "label": node.label, "metaclass": node.metaclass,
+        label = self._label(node)
+        result = {"key": node.key, "label": label, "metaclass": node.metaclass,
                   "qualifiedName": node.qualified_name, "stub": node.stub}
+        if label != node.label:
+            result["original"] = node.label
         if children:
             result["children"] = len(node.children)
         return result
 
     def row(self, node: Node) -> Dict[str, Any]:
         def labels(kind: str) -> Optional[str]:
-            return ", ".join(edge.target_label for edge in node.out if edge.kind == kind) or None
-        return {"key": node.key, "label": node.label, "metaclass": node.metaclass,
-                "qualifiedName": node.qualified_name,
-                "owner": node.owner.label if node.owner is not None else None,
+            return ", ".join(self._target_label(edge) for edge in node.out if edge.kind == kind) or None
+        label = self._label(node)
+        docs = self._docs(node)
+        return {"key": node.key, "label": label, "original": node.label if label != node.label else None,
+                "metaclass": node.metaclass, "qualifiedName": node.qualified_name,
+                "owner": self._label(node.owner) if node.owner is not None else None,
                 "typing": labels("typing"), "subclassification": labels("subclassification"),
                 "redefinition": labels("redefinition"), "subsetting": labels("subsetting"),
                 "reference": labels("reference"), "usages": len(node.edges_in("typing")) or None,
                 "multiplicity": node.multiplicity, "value": node.value,
-                "doc": node.doc[0].splitlines()[0] if node.doc else None,
+                "doc": docs[0].splitlines()[0] if docs else None,
                 "file": _file_name(node.model_uri), "line": node.line, "stub": node.stub}
 
     def detail(self, node: Node) -> Dict[str, Any]:
@@ -162,9 +189,11 @@ class BrowserApp:
                 if self._issue_node(model, issue) is node:
                     issues.append({"severity": issue.severity, "message": issue.message, "line": issue.line,
                                    "column": issue.column})
-        result = self.summary(node)
-        result.update(node.to_dict())
+        result = node.to_dict()
+        result.update(self.summary(node))
+        docs = self._docs(node)
         result.update({
+            "doc": docs, "docOriginal": node.doc if docs != node.doc else None,
             "file": _file_name(node.model_uri), "uri": node.key, "ancestors": ancestors,
             "children": [self.summary(child, children=True) for child in node.children[:MAX_CHILDREN]],
             "childCount": len(node.children),
@@ -176,8 +205,10 @@ class BrowserApp:
 
     def _edge(self, edge: Edge, other: Optional[Node], path: Optional[str]) -> Dict[str, Any]:
         via = self.ws.graph.node(edge.via)
+        if path and self.tr is not None:
+            path = self.tr.path(edge.source, path)
         return {"kind": edge.kind, "node": self.summary(other) if other is not None else None,
-                "label": path or (other.label if other is not None else edge.text or "?"),
+                "label": path or (self._label(other) if other is not None else edge.text or "?"),
                 "unresolved": other is None,
                 "via": self.summary(via) if via is not None and via is not edge.source and via is not edge.target
                 else None}
