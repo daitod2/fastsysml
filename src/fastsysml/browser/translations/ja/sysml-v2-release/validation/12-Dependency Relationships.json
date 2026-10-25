@@ -1,0 +1,33 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/validation/12-Dependency Relationships (EPL-2.0)",
+  "files": ["sysml/src/validation/12-Dependency Relationships/*.sysml"],
+  "names": {
+    "12a-Dependency": "12a-依存",
+    "12b-Allocation": "12b-割り当て",
+    "12b-Allocation-1": "12b-割り当て-1",
+    "Application Layer": "アプリケーション層",
+    "Data Layer": "データ層",
+    "engine": "エンジン",
+    "GenerateTorque": "トルクを発生する",
+    "generateTorque": "トルクを発生する",
+    "generator": "発生器",
+    "logical": "論理",
+    "LogicalElement": "論理要素",
+    "LogicalModel": "論理モデル",
+    "LogicalToPhysical": "論理から物理へ",
+    "physical": "物理",
+    "PhysicalElement": "物理要素",
+    "PhysicalModel": "物理モデル",
+    "PowerTrain": "パワートレイン",
+    "powerTrain": "パワートレイン",
+    "providePower": "動力を供給する",
+    "RequirementModel": "要求モデル",
+    "Service Layer": "サービス層",
+    "torque": "トルク",
+    "torqueGenAlloc": "トルク発生の割り当て",
+    "torqueGeneration": "トルクの発生",
+    "TorqueGenerator": "トルク発生器",
+    "torqueGenerator": "トルク発生器",
+    "Use": "使う"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/validation/04-Functional Allocation (EPL-2.0)",
+  "files": ["sysml/src/validation/04-Functional Allocation/*.sysml"],
+  "names": {
+    "4a-Functional Allocation": "4a-機能の割り当て",
+    "driveshaftTorque": "ドライブシャフトのトルク",
+    "engineTorque": "エンジントルク",
+    "fuelCmd": "燃料指令",
+    "transmissionTorque": "変速機のトルク",
+    "vehicle1_c1_functional_allocation": "車両1_c1_機能の割り当て",
+    "wheelTorque": "車輪のトルク",
+    "wheelTorque1": "車輪のトルク1",
+    "wheelTorque2": "車輪のトルク2"
+  },
+  "texts": {
+    "This allocates the action '3a-Function-based Behavior-1'::'provide power' as an enacted performance of 'vehicle_c1_functional_allocation'.": "アクション '3a-Function-based Behavior-1'::'provide power' を、'vehicle_c1_functional_allocation' が実際に行う実行として割り当てる。",
+    "This allocates one of the sub-steps of 'provide power' to a sub-part of vehicle_c1.": "'provide power' のサブステップの1つを、vehicle_c1 のサブパートに割り当てる。"
+  }
+}

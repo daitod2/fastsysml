@@ -1,0 +1,34 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/validation/18-Use Case (EPL-2.0)",
+  "files": ["sysml/src/validation/18-Use Case/*.sysml"],
+  "names": {
+    "18-Use Case": "18-ユースケース",
+    "add fuel": "給油する",
+    "done": "終了",
+    "drive vehicle": "車両を運転する",
+    "driver": "運転者",
+    "enter vehicle": "車両に入る",
+    "Environment": "環境",
+    "environment": "環境",
+    "exit vehicle": "車両から出る",
+    "Fuel Station": "給油所",
+    "fuel station": "給油所",
+    "fueler": "給油する人",
+    "obj": "目的",
+    "passengers": "乗客",
+    "Person": "人",
+    "provide transportation": "移動手段を提供する",
+    "start": "開始",
+    "Vehicle": "車両",
+    "vehicle": "車両"
+  },
+  "texts": {
+    "Satisfy mission requirements to transport driver and passengers from starting location to ending location in conformance with the driving profile and meet the mission requirements for safety, reliability, comfort, and affordability.": "運転プロファイルに従って運転者と乗客を出発地から目的地まで運ぶというミッションの要求を満たし、安全・信頼性・快適さ・手頃な費用についてのミッションの要求を満たす。",
+    "Mock-up of a pre-condition.": "事前条件の模擬。",
+    "Vehicle at starting location": "車両が出発地にある",
+    "Mock-up of an extension point. (But reference to 'add fuel' is in the wrong direction, and it doesn't make the extension condition sufficient to trigger the behavior.)": "拡張点の模擬（ただし、'add fuel' への参照は向きが逆であり、拡張の条件だけでは振る舞いを起動するのに十分ではない）。",
+    "Fuel level < 10% max fuel": "燃料の残量 < 最大燃料の10%",
+    "Mock-up of a post-condition.": "事後条件の模擬。",
+    "Vehicle at ending location": "車両が目的地にある"
+  }
+}

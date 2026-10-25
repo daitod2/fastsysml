@@ -1,0 +1,29 @@
+{
+  "source": "SysML v2 Release 2026-08, sysml/src/validation/17-Sequence Modeling (EPL-2.0)",
+  "files": ["sysml/src/validation/17-Sequence Modeling/*.sysml"],
+  "names": {
+    "17a-Sequence-Modeling": "17a-シーケンスのモデル化",
+    "17b-Sequence-Modeling": "17b-シーケンスのモデル化",
+    "consumer": "消費者",
+    "Deliver": "配信",
+    "deliver_message": "配信_メッセージ",
+    "deliver_source_event": "配信_送信元イベント",
+    "deliver_target_event": "配信_送信先イベント",
+    "payload": "ペイロード",
+    "PayloadDefinitions": "ペイロードの定義群",
+    "producer": "生産者",
+    "publication": "発行物",
+    "Publish": "発行",
+    "publish_message": "発行_メッセージ",
+    "publish_source_event": "発行_送信元イベント",
+    "publish_target_event": "発行_送信先イベント",
+    "PubSubSequence": "発行購読シーケンス",
+    "server": "サーバー",
+    "Subscribe": "購読",
+    "subscribe_message": "購読_メッセージ",
+    "subscribe_source_event": "購読_送信元イベント",
+    "subscribe_target_event": "購読_送信先イベント",
+    "subscriber": "購読者",
+    "topic": "トピック"
+  }
+}

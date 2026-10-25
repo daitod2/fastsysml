@@ -177,7 +177,7 @@ python -m fastsysml browse Vehicle.sysml --lang ja
 - 訳は `src/fastsysml/browser/translations/<言語>/` にあります。
   - `glossary.json`：メタクラスと辺の種類の訳語です。`XDefinition` は「X定義」、`XUsage` は「X」としています（テキスト記法の `part def` と `part` に合わせています）。
   - それ以外の JSON ファイル：モデルの辞書です。`files`（どのファイルに使うか。パスの末尾と照合します）、`names`（宣言された名前ごと）、`qualifiedNames`（その要素だけ）、`texts`（ドキュメントとコメント。空白の違いは無視します）を持ちます。フィーチャーの連鎖（`a.b`）は名前ごとに訳します。
-- 同梱している訳は、SysML v2 Release（2026-08）の `sysml/src/examples` の22フォルダ分です。記号や略語（`x`、`v_out`、`APIS` など）は訳していません。
+- 同梱している訳は、SysML v2 Release（2026-08）の `sysml/src/examples`（22フォルダ）と `sysml/src/validation`（17フォルダ）の分です。記号や略語（`x`、`v_out`、`APIS` など）は訳していません。
 
 ### Python から使う
 
