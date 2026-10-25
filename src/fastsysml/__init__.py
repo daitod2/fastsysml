@@ -29,6 +29,15 @@ RESOLVE_LEVELS = ("none", "lazy", "all")
 Input = Union[str, os.PathLike, Dict[str, str]]
 
 
+def _file_path(uri: str) -> Path:
+    """The path of a file: URI (as written by EMF)."""
+    from urllib.parse import unquote, urlparse
+    path = unquote(urlparse(uri).path)
+    if os.name == "nt" and path.startswith("/") and len(path) > 2 and path[2] == ":":
+        path = path[1:]
+    return Path(path)
+
+
 class SysMLParser:
     """A SysML/KerML parser backed by a long-lived Java process (start it once and reuse it).
 
@@ -69,13 +78,15 @@ class SysMLParser:
         return self.parse_many(list(paths), **options)
 
     def parse_many(self, inputs: Sequence[Input], resolve: str = "none", validate: bool = False,
-                   derived: Sequence[str] = (), positions: bool = True, keep: bool = False) -> List[Model]:
+                   derived: Sequence[str] = (), positions: bool = True, keep: bool = False,
+                   uris: bool = False) -> List[Model]:
         """Parses inputs (paths, or {"text": ..., "name": ...}) together.
 
         validate: also run the validation checks (implies loading the library).
         derived: names of derived properties to include for each element (e.g. ["qualifiedName", "type"]).
         positions: include line numbers and offsets.
         keep: keep the inputs loaded after the call (so that later calls can reference them), until unload().
+        uris: include the URI of each element (Element.uri), to match references from other models to it.
         """
         if resolve not in RESOLVE_LEVELS:
             raise ValueError(f"resolve must be one of {RESOLVE_LEVELS}")
@@ -93,9 +104,34 @@ class SysMLParser:
                 except OSError:
                     sources.append(None)
         response = self._bridge.request("parse", inputs=requests, resolve=resolve, validate=validate,
-                                        derived=list(derived), positions=positions, keep=keep)
+                                        derived=list(derived), positions=positions, keep=keep, uris=uris)
         timing = response.get("timing", {})
         return [Model(data, source, timing) for data, source in zip(response["models"], sources)]
+
+    def get(self, uris: Sequence[str], subtree: bool = False, derived: Sequence[str] = (),
+            positions: bool = True) -> List[Optional[Model]]:
+        """Gets elements by URI (External.uri or Element.uri), for example of the library or of inputs kept with
+        keep=True (not of other files), with their references resolved. Each one is a Model whose root is the element (with subtree,
+        also all the elements it owns), with its owner as Model.owner; None if it is not found."""
+        response = self._bridge.request("get", uris=list(uris), subtree=subtree, derived=list(derived),
+                                        positions=positions)
+        models: List[Optional[Model]] = []
+        for data in response["models"]:
+            if data.get("missing"):
+                models.append(None)
+                continue
+            source = None
+            if data["uri"].startswith("file:"):
+                try:
+                    source = _file_path(data["uri"]).read_text(encoding="utf-8")
+                except OSError:
+                    pass
+            models.append(Model(data, source))
+        return models
+
+    def metaclasses(self) -> Dict[str, Dict[str, Any]]:
+        """The metaclasses, as {name: {"abstract": bool, "supertypes": [names, from the most general]}}."""
+        return self._bridge.request("metaclasses")["metaclasses"]
 
     def load_library(self, resolve: bool = False) -> float:
         """Loads (and with resolve=True, resolves) the library now. Returns the time taken in ms."""

@@ -23,6 +23,8 @@ import java.util.Set;
 import org.eclipse.emf.common.util.EList;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EAttribute;
+import org.eclipse.emf.ecore.EClass;
+import org.eclipse.emf.ecore.EClassifier;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EPackage;
 import org.eclipse.emf.ecore.EReference;
@@ -44,6 +46,8 @@ import org.omg.kerml.xtext.KerMLRuntimeModule;
 import org.omg.kerml.xtext.KerMLStandaloneSetup;
 import org.omg.sysml.io.SysMLUtil;
 import org.omg.sysml.lang.sysml.Element;
+import org.omg.sysml.lang.sysml.Membership;
+import org.omg.sysml.lang.sysml.OwningMembership;
 import org.omg.sysml.lang.sysml.SysMLPackage;
 import org.omg.sysml.util.SysMLLibraryUtil;
 import org.omg.sysml.xtext.SysMLRuntimeModule;
@@ -73,8 +77,13 @@ import com.google.inject.util.Modules;
  * <li>plain: the unchanged pilot implementation.</li>
  * </ul>
  * Requests: {"op": "parse", "inputs": [{"path": ...} | {"text": ..., "name": ...}], "resolve": "none"|"lazy"|"all",
- * "validate": bool, "derived": [feature names], "positions": bool, "keep": bool}, {"op": "unload"},
- * {"op": "stats"}, {"op": "shutdown"}.
+ * "validate": bool, "derived": [feature names], "positions": bool, "keep": bool, "uris": bool},
+ * {"op": "get", "uris": [element URIs], "subtree": bool, "derived": [...], "positions": bool},
+ * {"op": "metaclasses"}, {"op": "unload"}, {"op": "stats"}, {"op": "shutdown"}.
+ * <p>
+ * With "uris", each element also has its URI fragment ("fragment"), so that references to it from other models
+ * (written with its URI) can be matched. A reference to an element of another model is its URI (and, if resolved,
+ * its qualified name; for a membership, those of its member, with "memberUri").
  */
 public class Bridge extends SysMLUtil {
 
@@ -169,6 +178,12 @@ public class Bridge extends SysMLUtil {
 		case "parse":
 			parse(request, w);
 			break;
+		case "get":
+			get(request, w);
+			break;
+		case "metaclasses":
+			writeMetaclasses(w);
+			break;
 		case "unload":
 			w.name("unloaded").value(unloadInputs());
 			break;
@@ -201,6 +216,7 @@ public class Bridge extends SysMLUtil {
 		boolean validate = request.has("validate") && request.get("validate").getAsBoolean();
 		boolean positions = !request.has("positions") || request.get("positions").getAsBoolean();
 		boolean keep = request.has("keep") && request.get("keep").getAsBoolean();
+		boolean uris = request.has("uris") && request.get("uris").getAsBoolean();
 		List<String> derived = new ArrayList<>();
 		if (request.has("derived")) {
 			for (JsonElement name: request.getAsJsonArray("derived")) {
@@ -236,7 +252,7 @@ public class Bridge extends SysMLUtil {
 
 		w.name("models").beginArray();
 		for (int i = 0; i < resources.size(); i++) {
-			export(resources.get(i), issues.get(i), isResolving, positions, derived, w);
+			export(resources.get(i), issues.get(i), isResolving, positions, uris, derived, w);
 		}
 		w.endArray();
 		long t5 = System.nanoTime();
@@ -299,8 +315,8 @@ public class Bridge extends SysMLUtil {
 
 	// Export
 
-	void export(Resource resource, List<Issue> issues, boolean isResolved, boolean positions, List<String> derived,
-			JsonWriter w) throws IOException {
+	void export(Resource resource, List<Issue> issues, boolean isResolved, boolean positions, boolean uris,
+			List<String> derived, JsonWriter w) throws IOException {
 		Map<EObject, Integer> ids = new IdentityHashMap<>();
 		List<EObject> objects = new ArrayList<>();
 		for (Iterator<EObject> contents = resource.getAllContents(); contents.hasNext();) {
@@ -319,88 +335,7 @@ public class Bridge extends SysMLUtil {
 		w.endArray();
 		w.name("elements").beginArray();
 		for (EObject object: objects) {
-			w.beginObject();
-			w.name("id").value(ids.get(object));
-			w.name("type").value(object.eClass().getName());
-			EObject container = object.eContainer();
-			if (container != null && ids.containsKey(container)) {
-				w.name("owner").value(ids.get(container));
-				w.name("role").value(object.eContainingFeature().getName());
-			}
-			if (positions) {
-				ICompositeNode node = NodeModelUtils.getNode(object);
-				if (node != null) {
-					w.name("line").value(node.getStartLine());
-					w.name("endLine").value(node.getEndLine());
-					w.name("offset").value(node.getOffset());
-					w.name("length").value(node.getLength());
-				}
-			}
-			for (EAttribute attribute: object.eClass().getEAllAttributes()) {
-				if (attribute.isDerived() || attribute.isTransient() || !object.eIsSet(attribute) ||
-						attribute == SysMLPackage.Literals.ELEMENT__ELEMENT_ID) {
-					continue;
-				}
-				w.name(attribute.getName());
-				writeValue(object.eGet(attribute), w, ids, qualifiedNames, isResolved);
-			}
-			boolean hasReferences = false;
-			for (EReference reference: object.eClass().getEAllReferences()) {
-				if (reference.isContainment() || reference.isContainer() || reference.isDerived() ||
-						// Computed from other references (and resolving them) by each kind of Relationship.
-						reference == SysMLPackage.Literals.RELATIONSHIP__SOURCE ||
-						reference == SysMLPackage.Literals.RELATIONSHIP__TARGET) {
-					continue;
-				}
-				Object value = object.eGet(reference, false);
-				List<?> values = reference.isMany()? basicList(value): value == null? List.of(): List.of(value);
-				if (values.isEmpty()) {
-					continue;
-				}
-				List<INode> nodes = null;
-				boolean hasProxies = false;
-				for (Object target: values) {
-					hasProxies |= ((EObject)target).eIsProxy();
-				}
-				if (hasProxies) {
-					nodes = NodeModelUtils.findNodesForFeature(object, reference);
-					if (nodes.isEmpty()) {
-						// Not parsed for this reference: computed from another one (e.g., the general of a
-						// FeatureTyping is its type), which is written itself.
-						continue;
-					}
-				}
-				if (!hasReferences) {
-					w.name("refs").beginObject();
-					hasReferences = true;
-				}
-				w.name(reference.getName()).beginArray();
-				for (int i = 0; i < values.size(); i++) {
-					EObject target = (EObject)values.get(i);
-					if (target.eIsProxy()) {
-						w.beginObject().name("unresolved")
-							.value(i < nodes.size()? NodeModelUtils.getTokenText(nodes.get(i)): null).endObject();
-					} else {
-						writeTarget(target, w, ids, qualifiedNames, isResolved);
-					}
-				}
-				w.endArray();
-			}
-			if (hasReferences) {
-				w.endObject();
-			}
-			if (!derived.isEmpty()) {
-				w.name("derived").beginObject();
-				for (String name: derived) {
-					EStructuralFeature feature = object.eClass().getEStructuralFeature(name);
-					if (feature != null) {
-						w.name(name);
-						writeValue(object.eGet(feature), w, ids, qualifiedNames, isResolved);
-					}
-				}
-				w.endObject();
-			}
-			w.endObject();
+			writeElement(object, ids, qualifiedNames, isResolved, positions, uris, derived, w);
 		}
 		w.endArray();
 
@@ -428,6 +363,195 @@ public class Bridge extends SysMLUtil {
 			writeDiagnostics(resource.getWarnings(), "warning", w);
 		}
 		w.endArray();
+		w.endObject();
+	}
+
+	/**
+	 * Writes elements given by URI (for example, of the library), each as a model with the element as its root
+	 * (and, with subtree, all the elements it owns), as the export does; elements outside it are written as
+	 * references by URI. Their references are resolved first.
+	 */
+	void get(JsonObject request, JsonWriter w) throws IOException {
+		boolean subtree = request.has("subtree") && request.get("subtree").getAsBoolean();
+		boolean positions = !request.has("positions") || request.get("positions").getAsBoolean();
+		List<String> derived = new ArrayList<>();
+		if (request.has("derived")) {
+			for (JsonElement name: request.getAsJsonArray("derived")) {
+				derived.add(name.getAsString());
+			}
+		}
+		loadLibrary();
+		Map<EObject, String> qualifiedNames = new IdentityHashMap<>();
+		w.name("models").beginArray();
+		for (JsonElement uri: request.getAsJsonArray("uris")) {
+			// Only in loaded models (inputs kept and the library): loading a file here would leave it loaded, unlike
+			// the inputs, and a later parse would reuse it.
+			EObject root = getResourceSet().getEObject(URI.createURI(uri.getAsString()), false);
+			if (root == null || root.eIsProxy()) {
+				w.beginObject().name("uri").value(uri.getAsString()).name("missing").value(true).endObject();
+				continue;
+			}
+			Map<EObject, Integer> ids = new IdentityHashMap<>();
+			List<EObject> objects = new ArrayList<>();
+			ids.put(root, 0);
+			objects.add(root);
+			if (subtree) {
+				for (Iterator<EObject> contents = root.eAllContents(); contents.hasNext();) {
+					EObject object = contents.next();
+					ids.put(object, objects.size());
+					objects.add(object);
+				}
+			}
+			for (EObject object: objects) {
+				resolveReferences(object);
+			}
+			w.beginObject();
+			w.name("uri").value(root.eResource().getURI().toString());
+			// Its owner, skipping a membership (written as "membership"), as a reference by URI.
+			EObject container = root.eContainer();
+			if (container instanceof OwningMembership) {
+				w.name("membership").value(container.eClass().getName());
+				container = container.eContainer();
+			}
+			if (container != null) {
+				w.name("owner");
+				writeTarget(container, w, ids, qualifiedNames, true);
+			}
+			w.name("roots").beginArray().value(0).endArray();
+			w.name("elements").beginArray();
+			for (EObject object: objects) {
+				writeElement(object, ids, qualifiedNames, true, positions, true, derived, w);
+			}
+			w.endArray();
+			w.name("issues").beginArray().endArray();
+			w.endObject();
+		}
+		w.endArray();
+	}
+
+	/** Resolves the (non-derived) references of an object, as the linker does. */
+	static void resolveReferences(EObject object) {
+		for (EReference reference: object.eClass().getEAllReferences()) {
+			if (reference.isContainment() || reference.isContainer() || reference.isDerived() ||
+					reference == SysMLPackage.Literals.RELATIONSHIP__SOURCE ||
+					reference == SysMLPackage.Literals.RELATIONSHIP__TARGET) {
+				continue;
+			}
+			Object value = object.eGet(reference, true);
+			if (value instanceof List) {
+				for (Iterator<?> values = ((List<?>)value).iterator(); values.hasNext();) {
+					values.next();
+				}
+			}
+		}
+	}
+
+	/** The metaclasses of SysML (and KerML), with all their supertypes (from the most general one). */
+	static void writeMetaclasses(JsonWriter w) throws IOException {
+		w.name("metaclasses").beginObject();
+		for (EClassifier classifier: SysMLPackage.eINSTANCE.getEClassifiers()) {
+			if (classifier instanceof EClass) {
+				EClass eClass = (EClass)classifier;
+				w.name(eClass.getName()).beginObject();
+				w.name("abstract").value(eClass.isAbstract());
+				w.name("supertypes").beginArray();
+				for (EClass supertype: eClass.getEAllSuperTypes()) {
+					w.value(supertype.getName());
+				}
+				w.endArray();
+				w.endObject();
+			}
+		}
+		w.endObject();
+	}
+
+	void writeElement(EObject object, Map<EObject, Integer> ids, Map<EObject, String> qualifiedNames,
+			boolean isResolved, boolean positions, boolean uris, List<String> derived, JsonWriter w)
+			throws IOException {
+		w.beginObject();
+		w.name("id").value(ids.get(object));
+		w.name("type").value(object.eClass().getName());
+		if (uris) {
+			w.name("fragment").value(object.eResource().getURIFragment(object));
+		}
+		EObject container = object.eContainer();
+		if (container != null && ids.containsKey(container)) {
+			w.name("owner").value(ids.get(container));
+			w.name("role").value(object.eContainingFeature().getName());
+		}
+		if (positions) {
+			ICompositeNode node = NodeModelUtils.getNode(object);
+			if (node != null) {
+				w.name("line").value(node.getStartLine());
+				w.name("endLine").value(node.getEndLine());
+				w.name("offset").value(node.getOffset());
+				w.name("length").value(node.getLength());
+			}
+		}
+		for (EAttribute attribute: object.eClass().getEAllAttributes()) {
+			if (attribute.isDerived() || attribute.isTransient() || !object.eIsSet(attribute) ||
+					attribute == SysMLPackage.Literals.ELEMENT__ELEMENT_ID) {
+				continue;
+			}
+			w.name(attribute.getName());
+			writeValue(object.eGet(attribute), w, ids, qualifiedNames, isResolved);
+		}
+		boolean hasReferences = false;
+		for (EReference reference: object.eClass().getEAllReferences()) {
+			if (reference.isContainment() || reference.isContainer() || reference.isDerived() ||
+					// Computed from other references (and resolving them) by each kind of Relationship.
+					reference == SysMLPackage.Literals.RELATIONSHIP__SOURCE ||
+					reference == SysMLPackage.Literals.RELATIONSHIP__TARGET) {
+				continue;
+			}
+			Object value = object.eGet(reference, false);
+			List<?> values = reference.isMany()? basicList(value): value == null? List.of(): List.of(value);
+			if (values.isEmpty()) {
+				continue;
+			}
+			List<INode> nodes = null;
+			boolean hasProxies = false;
+			for (Object target: values) {
+				hasProxies |= ((EObject)target).eIsProxy();
+			}
+			if (hasProxies) {
+				nodes = NodeModelUtils.findNodesForFeature(object, reference);
+				if (nodes.isEmpty()) {
+					// Not parsed for this reference: computed from another one (e.g., the general of a
+					// FeatureTyping is its type), which is written itself.
+					continue;
+				}
+			}
+			if (!hasReferences) {
+				w.name("refs").beginObject();
+				hasReferences = true;
+			}
+			w.name(reference.getName()).beginArray();
+			for (int i = 0; i < values.size(); i++) {
+				EObject target = (EObject)values.get(i);
+				if (target.eIsProxy()) {
+					w.beginObject().name("unresolved")
+						.value(i < nodes.size()? NodeModelUtils.getTokenText(nodes.get(i)): null).endObject();
+				} else {
+					writeTarget(target, w, ids, qualifiedNames, isResolved);
+				}
+			}
+			w.endArray();
+		}
+		if (hasReferences) {
+			w.endObject();
+		}
+		if (!derived.isEmpty()) {
+			w.name("derived").beginObject();
+			for (String name: derived) {
+				EStructuralFeature feature = object.eClass().getEStructuralFeature(name);
+				if (feature != null) {
+					w.name(name);
+					writeValue(object.eGet(feature), w, ids, qualifiedNames, isResolved);
+				}
+			}
+			w.endObject();
+		}
 		w.endObject();
 	}
 
@@ -476,9 +600,15 @@ public class Bridge extends SysMLUtil {
 		w.beginObject();
 		w.name("uri").value(EcoreUtil.getURI(target).toString());
 		if (isResolved && target instanceof Element && !target.eIsProxy()) {
-			String qualifiedName = qualifiedNames.computeIfAbsent(target, t -> ((Element)t).getQualifiedName());
+			// A membership (e.g. imported) has no name: its member's qualified name, and its member's URI.
+			Element member = target instanceof Membership? ((Membership)target).getMemberElement(): null;
+			String qualifiedName = qualifiedNames.computeIfAbsent(target, t -> t instanceof Membership?
+					member == null? null: member.getQualifiedName(): ((Element)t).getQualifiedName());
 			if (qualifiedName != null) {
 				w.name("qualifiedName").value(qualifiedName);
+			}
+			if (member != null && !member.eIsProxy()) {
+				w.name("memberUri").value(EcoreUtil.getURI(member).toString());
 			}
 		}
 		w.endObject();

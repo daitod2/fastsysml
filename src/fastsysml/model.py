@@ -6,13 +6,15 @@ from typing import Any, Dict, Iterator, List, Optional, Union
 
 
 class External:
-    """A reference to an element of another model (for example, of the standard library)."""
+    """A reference to an element of another model (for example, of the standard library). For a membership (e.g.
+    imported), qualified_name is that of its member, and member_uri its URI."""
 
-    __slots__ = ("uri", "qualified_name")
+    __slots__ = ("uri", "qualified_name", "member_uri")
 
-    def __init__(self, uri: str, qualified_name: Optional[str]):
+    def __init__(self, uri: str, qualified_name: Optional[str], member_uri: Optional[str] = None):
         self.uri = uri
         self.qualified_name = qualified_name
+        self.member_uri = member_uri
 
     def __repr__(self) -> str:
         return f"External({self.qualified_name or self.uri!r})"
@@ -36,13 +38,14 @@ Target = Union["Element", External, Unresolved, Any]
 class Element:
     """An element of a model: its metaclass (type), owner, attributes, references and position."""
 
-    __slots__ = ("model", "id", "type", "owner_id", "role", "line", "end_line", "offset", "length",
+    __slots__ = ("model", "id", "type", "fragment", "owner_id", "role", "line", "end_line", "offset", "length",
                  "attrs", "_refs", "_derived", "children")
 
     def __init__(self, model: "Model", data: Dict[str, Any]):
         self.model = model
         self.id: int = data["id"]
         self.type: str = data["type"]
+        self.fragment: Optional[str] = data.get("fragment")
         self.owner_id: Optional[int] = data.get("owner")
         self.role: Optional[str] = data.get("role")
         self.line: Optional[int] = data.get("line")
@@ -57,6 +60,11 @@ class Element:
     @property
     def owner(self) -> Optional["Element"]:
         return None if self.owner_id is None else self.model.elements[self.owner_id]
+
+    @property
+    def uri(self) -> Optional[str]:
+        """The URI of the element (only with parse(..., uris=True) or get), as in External.uri."""
+        return None if self.fragment is None else f"{self.model.uri}#{self.fragment}"
 
     @property
     def name(self) -> Optional[str]:
@@ -100,7 +108,7 @@ class Element:
         return f"<{self.type}{' ' + name if name else ''} #{self.id}>"
 
 
-_NON_ATTRIBUTES = {"id", "type", "owner", "role", "line", "endLine", "offset", "length", "refs", "derived"}
+_NON_ATTRIBUTES = {"id", "type", "fragment", "owner", "role", "line", "endLine", "offset", "length", "refs", "derived"}
 
 
 class Issue:
@@ -138,6 +146,10 @@ class Model:
                 self.elements[element.owner_id].children.append(element)
         self.roots: List[Element] = [self.elements[i] for i in data["roots"]]
         self.issues: List[Issue] = [Issue(self, issue) for issue in data["issues"]]
+        # For an element got by URI (SysMLParser.get): its owner (an External, skipping an owning membership) and
+        # the metaclass of that membership.
+        self.owner: Optional[Target] = self._target(data["owner"]) if "owner" in data else None
+        self.membership: Optional[str] = data.get("membership")
 
     @property
     def errors(self) -> List[Issue]:
@@ -163,7 +175,7 @@ class Model:
             if "unresolved" in value:
                 return Unresolved(value["unresolved"])
             if "uri" in value:
-                return External(value["uri"], value.get("qualifiedName"))
+                return External(value["uri"], value.get("qualifiedName"), value.get("memberUri"))
         return value
 
     def _value(self, value: Any) -> Any:
