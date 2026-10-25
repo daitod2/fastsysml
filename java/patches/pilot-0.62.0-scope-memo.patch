@@ -1,0 +1,1042 @@
+diff --git a/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScope.java b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScope.java
+new file mode 100644
+index 0000000..a0738d4
+--- /dev/null
++++ b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScope.java
+@@ -0,0 +1,337 @@
++/*****************************************************************************
++ * SysML 2 Pilot Implementation
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the Eclipse Public License as published by
++ * the Eclipse Foundation, version 2 of the License.
++ *
++ * @license EPL-2.0 <http://spdx.org/licenses/EPL-2.0>
++ *****************************************************************************/
++
++package org.omg.kerml.xtext.scoping;
++
++import java.util.ArrayDeque;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.Deque;
++import java.util.IdentityHashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import org.eclipse.emf.ecore.EClass;
++import org.eclipse.xtext.naming.QualifiedName;
++import org.eclipse.xtext.resource.IEObjectDescription;
++import org.eclipse.xtext.scoping.IScope;
++import org.omg.kerml.xtext.naming.QualifiedNameUtil;
++import org.omg.sysml.adapter.ElementAdapter;
++import org.omg.sysml.adapter.NamespaceAdapter;
++import org.omg.sysml.lang.sysml.Conjugation;
++import org.omg.sysml.lang.sysml.Element;
++import org.omg.sysml.lang.sysml.Import;
++import org.omg.sysml.lang.sysml.Membership;
++import org.omg.sysml.lang.sysml.Namespace;
++import org.omg.sysml.lang.sysml.Redefinition;
++import org.omg.sysml.lang.sysml.Relationship;
++import org.omg.sysml.lang.sysml.Specialization;
++import org.omg.sysml.lang.sysml.SysMLPackage;
++import org.omg.sysml.util.ElementUtil;
++
++/**
++ * A KerMLScope that memoizes the result of resolving a name in its local scope (that is, without the
++ * outer scopes), in a table kept for its Namespace. The outer scopes are themselves MemoKerMLScopes,
++ * so the resolution of a name in a chain of nested scopes is memoized level by level.
++ * <p>
++ * Besides the Namespace and the name, the local result depends on the scope flags and possibly on
++ * the context Element and the skip Element, which are made part of the key as follows:
++ * <ul>
++ * <li>The context Element only matters in the first scope, for its own membership in the Namespace,
++ * when it has no declared name or short name (its declared names are used rather than its effective
++ * names), so it is only part of the key then.</li>
++ * <li>A skip Redefinition is always part of the key. Otherwise, the skip Element only matters if the
++ * search scans the ownedRelationships of the Element that owns it (it is excluded as visited). So the
++ * Namespaces scanned are recorded (the footprint), and a result whose footprint does not include the
++ * owner of the skip Element is shared by all skip Elements whose owners are not in the footprint.</li>
++ * </ul>
++ * Only searches started with no visited Elements in the scope provider are memoized, since visited
++ * Elements (during a nested resolution) are excluded from the search.
++ * <p>
++ * A result is only kept if it is final. A search during which some nested resolution found nothing
++ * (typically because of a cyclic dependency on a reference still being resolved) may find something
++ * else later. And a reference that is not found in any scope is retried by the linker later, when it
++ * may be found, so a local result of finding nothing is only kept once the name has been found in an
++ * outer scope of the same lookup.
++ */
++public class MemoKerMLScope extends KerMLScope {
++
++	public static class Stats {
++		public static long lookups, bypassNested, bypassGlobal, bypassNoAdapter;
++		public static long sharedHits, exactHits, misses, stored, provisional, notFoundStored, notFoundDropped, footprintTotal;
++
++		public static String summary() {
++			return String.format(
++				"lookups=%d bypass(nested=%d global=%d noAdapter=%d) hits(shared=%d exact=%d) misses=%d "
++				+ "stored=%d (notFound kept=%d dropped=%d) provisional=%d avgFootprint=%.1f oracle(checked=%d pruned=%d)",
++				lookups, bypassNested, bypassGlobal, bypassNoAdapter, sharedHits, exactHits, misses,
++				stored, notFoundStored, notFoundDropped, provisional, misses == 0? 0.0: (double)footprintTotal / misses,
++				oracleChecked, oraclePruned);
++		}
++	}
++
++	protected record Key(EClass referenceType, boolean isInsideScope, boolean isFirstScope, boolean isRedefinition,
++			boolean includeAll, Element element, Element skip, QualifiedName name) {}
++
++	protected record Result(IEObjectDescription description, boolean isShadowing, Set<Namespace> footprint) {}
++
++	protected record Entry(Map<Object, Object> table, Key key, Result result) {}
++
++	/**
++	 * A memoized search in progress. Nested searches can start while the visited Elements are momentarily
++	 * empty, and resolutions in other languages (scope providers) can be nested in a search.
++	 */
++	protected static class Frame {
++		final KerMLScopeProvider scopeProvider;
++		final Set<Namespace> footprint = Collections.newSetFromMap(new IdentityHashMap<>());
++		boolean isProvisional = false;
++
++		Frame(KerMLScopeProvider scopeProvider) {
++			this.scopeProvider = scopeProvider;
++		}
++	}
++
++	protected static final Deque<Frame> activeFrames = new ArrayDeque<>();
++
++	/**
++	 * For each lookup being evaluated (innermost first), the local results of finding nothing, to be kept
++	 * only if the name is then found in an outer scope.
++	 */
++	protected static final Deque<List<Entry>> pendingNotFound = new ArrayDeque<>();
++
++	/**
++	 * Whether the next call of getSingleElement is the delegation to the outer scope within a lookup,
++	 * rather than the start of a new lookup.
++	 */
++	protected static boolean isOuterScopeCall = false;
++
++	public MemoKerMLScope(IScope parent, Namespace ns, EClass referenceType, KerMLScopeProvider scopeProvider,
++			boolean isInsideScope, boolean isFirstScope, boolean isRedefinition, Element element, Element skip) {
++		super(parent, ns, referenceType, scopeProvider, isInsideScope, isFirstScope, isRedefinition, element, skip);
++	}
++
++	@Override
++	public IEObjectDescription getSingleElement(QualifiedName name) {
++		boolean isLookupStart = !isOuterScopeCall;
++		isOuterScopeCall = false;
++		if (!isLookupStart) {
++			return memoGetSingleElement(name);
++		}
++		pendingNotFound.push(new ArrayList<>());
++		IEObjectDescription description = null;
++		try {
++			description = memoGetSingleElement(name);
++		} finally {
++			List<Entry> notFound = pendingNotFound.pop();
++			if (description != null) {
++				for (Entry entry: notFound) {
++					entry.table().putIfAbsent(entry.key(), entry.result());
++				}
++				Stats.notFoundStored += notFound.size();
++			} else {
++				Stats.notFoundDropped += notFound.size();
++				// A (nested) resolution found nothing, so any search it is nested in is provisional.
++				for (Frame frame: activeFrames) {
++					frame.isProvisional = true;
++				}
++			}
++		}
++		return description;
++	}
++
++	protected IEObjectDescription memoGetSingleElement(QualifiedName name) {
++		Stats.lookups++;
++		if (QualifiedNameUtil.isGlobalScopeQualification(name)) {
++			Stats.bypassGlobal++;
++			return super.getSingleElement(name);
++		}
++		if (!scopeProvider.getVisited().isEmpty()) {
++			Stats.bypassNested++;
++			return super.getSingleElement(name);
++		}
++		ElementAdapter adapter = ElementUtil.getElementAdapter(ns);
++		if (!(adapter instanceof NamespaceAdapter)) {
++			Stats.bypassNoAdapter++;
++			return super.getSingleElement(name);
++		}
++		Map<Object, Object> table = ((NamespaceAdapter)adapter).getNameResolutionCache();
++
++		Result result = lookup(table, name);
++		if (result.isShadowing()) {
++			isShadowing = true;
++		}
++		if (result.description() != null) {
++			return result.description();
++		} else if (getParent() != null && !isShadowing) {
++			isOuterScopeCall = getParent() instanceof MemoKerMLScope;
++			try {
++				return getParent().getSingleElement(name);
++			} finally {
++				isOuterScopeCall = false;
++			}
++		} else {
++			return null;
++		}
++	}
++
++	protected Result lookup(Map<Object, Object> table, QualifiedName name) {
++		boolean includeAll = referenceType == SysMLPackage.eINSTANCE.getMembership() &&
++				element instanceof Import && ((Import)element).isImportAll();
++		Element elementKey = isFirstScope && element != null && element.getOwningNamespace() == ns &&
++				element.getDeclaredName() == null && element.getDeclaredShortName() == null? element: null;
++		Element skipOwner = getSkipOwner();
++
++		boolean skipInKey = skip instanceof Redefinition;
++		Key sharedKey = new Key(referenceType, isInsideScope, isFirstScope, isRedefinition, includeAll, elementKey,
++				skipInKey? skip: null, name);
++		Result shared = (Result)table.get(sharedKey);
++		if (shared != null && (skipInKey || skipOwner == null || !shared.footprint().contains(skipOwner))) {
++			Stats.sharedHits++;
++			addToActiveFootprints(shared.footprint());
++			return shared;
++		}
++		Key exactKey = null;
++		if (skip != null && !skipInKey) {
++			exactKey = new Key(referenceType, isInsideScope, isFirstScope, isRedefinition, includeAll, elementKey, skip, name);
++			Result exact = (Result)table.get(exactKey);
++			if (exact != null) {
++				Stats.exactHits++;
++				addToActiveFootprints(exact.footprint());
++				return exact;
++			}
++		}
++
++		Stats.misses++;
++		Frame frame = new Frame(scopeProvider);
++		Result result = compute(name, frame);
++		Stats.footprintTotal += result.footprint().size();
++		Key key = shared == null && (skipInKey || skipOwner == null || !result.footprint().contains(skipOwner))?
++				sharedKey: exactKey;
++		if (frame.isProvisional) {
++			Stats.provisional++;
++		} else if (key != null) {
++			if (result.description() != null) {
++				table.put(key, result);
++				Stats.stored++;
++			} else if (!pendingNotFound.isEmpty()) {
++				pendingNotFound.peek().add(new Entry(table, key, result));
++			}
++		}
++		return result;
++	}
++
++	/**
++	 * The Element whose ownedRelationships include the skip Element, if the search could encounter the
++	 * skip Element there (that is, if it is a Membership, Import, Specialization or Conjugation).
++	 */
++	protected Element getSkipOwner() {
++		if (skip instanceof Membership || skip instanceof Import || skip instanceof Specialization || skip instanceof Conjugation) {
++			return ((Relationship)skip).getOwningRelatedElement();
++		}
++		return null;
++	}
++
++	protected Result compute(QualifiedName name, Frame frame) {
++		boolean wasShadowing = isShadowing;
++		isShadowing = false;
++		activeFrames.push(frame);
++		try {
++			IEObjectDescription first = null;
++			for (IEObjectDescription description: resolveInScope(name, true)) {
++				first = description;
++				break;
++			}
++			return new Result(first, isShadowing, frame.footprint);
++		} finally {
++			activeFrames.pop();
++			isShadowing |= wasShadowing;
++		}
++	}
++
++	/**
++	 * The skip Element of a search is also excluded in the nested resolutions done during it, so the
++	 * Namespaces they scan are added to the footprints of all the searches in progress for the same
++	 * scope provider.
++	 */
++	protected void addToActiveFootprints(Namespace ns) {
++		for (Frame frame: activeFrames) {
++			if (frame.scopeProvider == scopeProvider) {
++				frame.footprint.add(ns);
++			}
++		}
++	}
++
++	protected void addToActiveFootprints(Set<Namespace> namespaces) {
++		for (Frame frame: activeFrames) {
++			if (frame.scopeProvider == scopeProvider) {
++				frame.footprint.addAll(namespaces);
++			}
++		}
++	}
++
++	// EXPERIMENT: names table per qualified name of a Namespace (membership names, as in the library index),
++	// taken from a previous run, to measure the most that pruning Namespaces outside the library could gain.
++	public static Map<String, Set<String>> oracle = null;
++	public static long oracleChecked, oraclePruned;
++
++	/**
++	 * Like the library index check in KerMLScope.resolve, skip a Namespace (other than the one of this scope)
++	 * that cannot contain the next segment of the qualified name searched for, using its name table.
++	 */
++	@Override
++	protected boolean resolve(Namespace ns, QualifiedName qn, Set<Namespace> ownedVisited, Set<Namespace> visited,
++			Set<Element> redefined, boolean checkIfAdded, boolean isInsideScope, boolean isInheriting,
++			boolean includeImplicitGen, boolean includeAll) {
++		if (ns != this.ns && targetqn != null && targetqn.startsWith(qn) && targetqn.getSegmentCount() > qn.getSegmentCount()) {
++			String segment = targetqn.getSegment(qn.getSegmentCount());
++			if (NameTables.enabled && NameTables.canSkip(ns, segment)) {
++				return false;
++			}
++			if (oracle != null) {
++				String qualifiedName = ns.getQualifiedName();
++				Set<String> names = qualifiedName == null? null: oracle.get(qualifiedName);
++				if (names != null) {
++					oracleChecked++;
++					if (!names.contains(segment)) {
++						oraclePruned++;
++						return false;
++					}
++				}
++			}
++		}
++		return super.resolve(ns, qn, ownedVisited, visited, redefined, checkIfAdded, isInsideScope, isInheriting,
++				includeImplicitGen, includeAll);
++	}
++
++	@Override
++	protected boolean owned(Namespace ns, QualifiedName qn, Set<Namespace> ownedvisited, Set<Namespace> visited,
++			Set<Element> redefined, boolean checkIfAdded, boolean isInsideScope, boolean isInheriting,
++			boolean includeImplicitGen, boolean includeAll) {
++		addToActiveFootprints(ns);
++		return super.owned(ns, qn, ownedvisited, visited, redefined, checkIfAdded, isInsideScope, isInheriting,
++				includeImplicitGen, includeAll);
++	}
++
++	@Override
++	protected boolean gen(Namespace ns, QualifiedName qn, Set<Namespace> visited, Set<Element> redefined,
++			boolean isInheriting, boolean includeImplicit) {
++		addToActiveFootprints(ns);
++		return super.gen(ns, qn, visited, redefined, isInheriting, includeImplicit);
++	}
++
++	@Override
++	protected boolean imp(Namespace ns, QualifiedName qn, Set<Namespace> visited, boolean isInsideScope,
++			boolean includeImplicitGen, boolean includeAll) {
++		addToActiveFootprints(ns);
++		return super.imp(ns, qn, visited, isInsideScope, includeImplicitGen, includeAll);
++	}
++
++}
+diff --git a/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScopeProvider.java b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScopeProvider.java
+new file mode 100644
+index 0000000..779946d
+--- /dev/null
++++ b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/MemoKerMLScopeProvider.java
+@@ -0,0 +1,40 @@
++/*****************************************************************************
++ * SysML 2 Pilot Implementation
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the Eclipse Public License as published by
++ * the Eclipse Foundation, version 2 of the License.
++ *
++ * @license EPL-2.0 <http://spdx.org/licenses/EPL-2.0>
++ *****************************************************************************/
++
++package org.omg.kerml.xtext.scoping;
++
++import org.eclipse.emf.ecore.EReference;
++import org.eclipse.xtext.scoping.IScope;
++import org.omg.sysml.lang.sysml.Element;
++import org.omg.sysml.lang.sysml.Namespace;
++
++/**
++ * A KerMLScopeProvider whose scopes are MemoKerMLScopes.
++ */
++public class MemoKerMLScopeProvider extends KerMLScopeProvider {
++
++	@Override
++	public IScope scopeFor(Namespace pack, EReference reference, Element element, boolean isInsideScope,
++			boolean isFirstScope, boolean isRedefinition, Element skip) {
++		return memoScopeFor(this, super.scopeFor(pack, reference, element, isInsideScope, isFirstScope, isRedefinition, skip),
++				pack, reference, element, isInsideScope, isFirstScope, isRedefinition, skip);
++	}
++
++	/**
++	 * Replaces the KerMLScope created by KerMLScopeProvider.scopeFor with an equivalent MemoKerMLScope.
++	 * (The outer scopes of the given scope have already been created by the overriding scopeFor.)
++	 */
++	public static IScope memoScopeFor(KerMLScopeProvider scopeProvider, IScope scope, Namespace pack, EReference reference,
++			Element element, boolean isInsideScope, boolean isFirstScope, boolean isRedefinition, Element skip) {
++		return new MemoKerMLScope(((KerMLScope)scope).getParent(), pack, reference.getEReferenceType(), scopeProvider,
++				isInsideScope, isFirstScope, isRedefinition, element, skip);
++	}
++
++}
+diff --git a/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/NameTables.java b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/NameTables.java
+new file mode 100644
+index 0000000..8883b78
+--- /dev/null
++++ b/org.omg.kerml.xtext/src/org/omg/kerml/xtext/scoping/NameTables.java
+@@ -0,0 +1,512 @@
++/*****************************************************************************
++ * SysML 2 Pilot Implementation
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the Eclipse Public License as published by
++ * the Eclipse Foundation, version 2 of the License.
++ *
++ * @license EPL-2.0 <http://spdx.org/licenses/EPL-2.0>
++ *****************************************************************************/
++
++package org.omg.kerml.xtext.scoping;
++
++import java.util.ArrayDeque;
++import java.util.Collections;
++import java.util.Deque;
++import java.util.HashSet;
++import java.util.IdentityHashMap;
++import java.util.Iterator;
++import java.util.Map;
++import java.util.Set;
++import java.util.WeakHashMap;
++
++import org.eclipse.emf.common.notify.Notification;
++import org.eclipse.emf.common.notify.impl.AdapterImpl;
++import org.eclipse.emf.ecore.EClass;
++import org.eclipse.emf.ecore.EObject;
++import org.eclipse.emf.ecore.EReference;
++import org.eclipse.emf.ecore.resource.Resource;
++import org.eclipse.emf.ecore.resource.ResourceSet;
++import org.eclipse.emf.ecore.util.InternalEList;
++import org.omg.sysml.adapter.ElementAdapter;
++import org.omg.sysml.adapter.FeatureAdapter;
++import org.omg.sysml.adapter.NamespaceAdapter;
++import org.omg.sysml.adapter.TypeAdapter;
++import org.omg.sysml.lang.sysml.Conjugation;
++import org.omg.sysml.lang.sysml.Element;
++import org.omg.sysml.lang.sysml.Expression;
++import org.omg.sysml.lang.sysml.Feature;
++import org.omg.sysml.lang.sysml.Import;
++import org.omg.sysml.lang.sysml.Membership;
++import org.omg.sysml.lang.sysml.MembershipImport;
++import org.omg.sysml.lang.sysml.Namespace;
++import org.omg.sysml.lang.sysml.NamespaceImport;
++import org.omg.sysml.lang.sysml.OwningMembership;
++import org.omg.sysml.lang.sysml.Relationship;
++import org.omg.sysml.lang.sysml.Specialization;
++import org.omg.sysml.lang.sysml.SysMLPackage;
++import org.omg.sysml.lang.sysml.Type;
++import org.omg.sysml.lang.sysml.VisibilityKind;
++import org.omg.sysml.util.ElementUtil;
++import org.omg.sysml.util.FeatureUtil;
++import org.omg.sysml.util.NamespaceUtil;
++import org.omg.sysml.util.TypeUtil;
++
++/**
++ * Lazily computed name tables, generalizing the precalculated library index (LibraryNamespaces) to all
++ * Namespaces: the name table of a Namespace contains every name that KerMLScope.resolve could find as the
++ * next segment of a qualified name searched in that Namespace, so the search can skip a Namespace whose
++ * table does not contain it.
++ * <p>
++ * The table is computed by following the same edges as the search (owned memberships; conjugated, general,
++ * implicit general and chaining types; imported namespaces and memberships, and the public descendants of
++ * recursive imports), so it is a superset of what the search can find. Computing a table must not resolve
++ * any reference, or change the order in which the pilot implementation computes and caches derived
++ * information (which can change its results). So tables are only computed for Namespaces in closed Resources
++ * (Resources with no unresolved proxies in their non-derived references, which only reference closed
++ * Resources). By default, they are also only computed from information that is already computed: if a name
++ * (the effective name of an unnamed Feature) or the implicit general types of a Namespace reached are not
++ * computed yet, the table is not available for now. With memo.tables.active, these are computed as the
++ * search itself would compute them. The tables are invalidated by any non-touch change notified for an
++ * Element in a closed Resource, and when a Resource referenced by a closed Resource is removed or unloaded.
++ */
++public class NameTables {
++
++	public static boolean enabled = Boolean.getBoolean("memo.tables");
++	
++	/**
++	 * Whether names and implicit general types that are not computed yet are computed for a table (as the
++	 * search itself would compute them), rather than making the table unavailable until they are.
++	 */
++	protected static final boolean ACTIVE = Boolean.getBoolean("memo.tables.active");
++
++	public static class Stats {
++		public static long checks, pruned, tablesComputed, incomplete, resourceScans, closedResources;
++		public static long invalidations, notClosed, expression, unnamed, implicitTypes;
++
++		public static String summary() {
++			return String.format("tables: checks=%d pruned=%d computed=%d incomplete=%d (notClosed=%d expression=%d unnamed=%d implicitTypes=%d) "
++					+ "resourceScans=%d closedResources=%d invalidations=%d",
++					checks, pruned, tablesComputed, incomplete, notClosed, expression, unnamed, implicitTypes,
++					resourceScans, closedResources, invalidations);
++		}
++	}
++
++	/**
++	 * A name table, or (names == null) the finding that it is not available yet, which is retried after
++	 * RECHECK_INTERVAL lookups.
++	 */
++	protected record Table(Set<String> names, long modificationCount, long epoch, long computedAtLookup) {}
++
++	protected static class ResourceState {
++		boolean isClosed;
++		long checkedAtLookup;
++		Set<Resource> references = Collections.emptySet();
++	}
++
++	/** Lookups (MemoKerMLScope.Stats.lookups) between rechecks of a Resource found not to be closed. */
++	protected static final long RECHECK_INTERVAL = 2000;
++
++	protected static final Object TABLE_KEY = NameTables.class;
++
++	protected static final Map<Resource, ResourceState> states = new WeakHashMap<>();
++
++	/** Incremented when a Resource stops being closed, invalidating all tables. */
++	protected static long epoch = 0;
++
++	/** The Namespaces whose tables are being computed (a computation can lead to name resolution). */
++	protected static final Set<Namespace> inProgress = Collections.newSetFromMap(new IdentityHashMap<>());
++
++	static {
++		ElementAdapter.isModificationTracked = NameTables::isKnownClosed;
++	}
++
++	/**
++	 * Whether a search for the given next name segment can skip the given Namespace.
++	 */
++	public static boolean canSkip(Namespace ns, String segment) {
++		Stats.checks++;
++		Set<String> names = namesOf(ns);
++		if (names != null && !names.contains(segment)) {
++			Stats.pruned++;
++			return true;
++		}
++		return false;
++	}
++
++	/**
++	 * The name table of the given Namespace, or null if it is not available.
++	 */
++	public static Set<String> namesOf(Namespace ns) {
++		Resource resource = ns.eResource();
++		if (resource == null || !isClosed(resource) || inProgress.contains(ns)) {
++			return null;
++		}
++		Table table = getValidTable(ns);
++		if (table != null && (table.names() != null ||
++				MemoKerMLScope.Stats.lookups - table.computedAtLookup() < RECHECK_INTERVAL)) {
++			return table.names();
++		}
++		inProgress.add(ns);
++		try {
++			Set<String> names = compute(ns);
++			if (names == null) {
++				Stats.incomplete++;
++			} else {
++				Stats.tablesComputed++;
++			}
++			// The computation can add (additional) members, so the modification count is taken after it.
++			cache(ns).put(TABLE_KEY, new Table(names, ElementAdapter.trackedModificationCount, epoch,
++					MemoKerMLScope.Stats.lookups));
++			return names;
++		} finally {
++			inProgress.remove(ns);
++		}
++	}
++
++	protected static Map<Object, Object> cache(Namespace ns) {
++		ElementAdapter adapter = ElementUtil.getElementAdapter(ns);
++		return adapter instanceof NamespaceAdapter? ((NamespaceAdapter)adapter).getNameResolutionCache(): new IdentityHashMap<>();
++	}
++
++	protected static Table getValidTable(Namespace ns) {
++		Table table = (Table)cache(ns).get(TABLE_KEY);
++		return table != null && table.modificationCount() == ElementAdapter.trackedModificationCount &&
++				table.epoch() == epoch? table: null;
++	}
++
++	/**
++	 * Collects the names found by following the search edges from the given Namespace, using the tables of
++	 * the Namespaces reached where they are available. Returns null if a Namespace that is not in a closed
++	 * Resource is reached.
++	 */
++	protected static Set<String> compute(Namespace start) {
++		Set<String> names = new HashSet<>();
++		Set<Namespace> visited = Collections.newSetFromMap(new IdentityHashMap<>());
++		Set<Namespace> visitedRecursively = Collections.newSetFromMap(new IdentityHashMap<>());
++		Deque<Namespace> stack = new ArrayDeque<>();
++		Deque<Namespace> recursiveStack = new ArrayDeque<>();
++		stack.push(start);
++		while (!stack.isEmpty() || !recursiveStack.isEmpty()) {
++			if (!recursiveStack.isEmpty()) {
++				// Public descendants of a recursively imported Namespace are each searched in full.
++				Namespace ns = recursiveStack.pop();
++				if (visitedRecursively.add(ns)) {
++					for (Relationship relationship: ns.getOwnedRelationship()) {
++						if (relationship instanceof OwningMembership &&
++								((OwningMembership)relationship).getVisibility() == VisibilityKind.PUBLIC &&
++								((OwningMembership)relationship).getOwnedMemberElement() instanceof Namespace) {
++							Namespace descendant = (Namespace)((OwningMembership)relationship).getOwnedMemberElement();
++							stack.push(descendant);
++							recursiveStack.push(descendant);
++						}
++					}
++				}
++				continue;
++			}
++			Namespace ns = stack.pop();
++			if (!visited.add(ns)) {
++				continue;
++			}
++			if (ns != start) {
++				Resource resource = ns.eResource();
++				if (resource == null || !isClosed(resource)) {
++					Stats.notClosed++;
++					return null;
++				}
++				Table table = inProgress.contains(ns)? null: getValidTable(ns);
++				if (table != null && table.names() != null) {
++					names.addAll(table.names());
++					continue;
++				}
++			}
++
++			// owned
++			if (ACTIVE) {
++				NamespaceUtil.addAdditionalMembersTo(ns);
++			} else if (ns instanceof Expression) {
++				// Expressions get additional members (result parameters) when first searched.
++				Stats.expression++;
++				return null;
++			}
++			for (Membership membership: ns.getOwnedMembership()) {
++				if (!addMemberNames(names, membership)) {
++					Stats.unnamed++;
++					return null;
++				}
++			}
++
++			// gen
++			if (ns instanceof Type) {
++				Type type = (Type)ns;
++				Conjugation conjugator = type.getOwnedConjugator();
++				if (conjugator != null) {
++					push(stack, conjugator.getOriginalType());
++				}
++				for (Specialization specialization: type.getOwnedSpecialization()) {
++					push(stack, specialization.getGeneral());
++				}
++				ElementAdapter adapter = ElementUtil.getElementAdapter(type);
++				if (ACTIVE) {
++					TypeUtil.getImplicitGeneralTypesFor(type);
++				}
++				if (!(adapter instanceof TypeAdapter) || !((TypeAdapter)adapter).isImplicitGeneralTypesComputed() ||
++						adapter instanceof FeatureAdapter && ((FeatureAdapter)adapter).isComputeRedefinitions()) {
++					Stats.implicitTypes++;
++					return null;
++				}
++				for (EClass kind: ((TypeAdapter)adapter).getImplicitGeneralTypeKinds()) {
++					for (Type implicitType: ((TypeAdapter)adapter).getImplicitGeneralTypesOnly(kind)) {
++						push(stack, implicitType);
++					}
++				}
++				if (type instanceof Feature) {
++					push(stack, FeatureUtil.getLastChainingFeatureOf((Feature)type));
++				}
++			}
++
++			// imp
++			for (Import imp: ns.getOwnedImport()) {
++				if (imp instanceof NamespaceImport) {
++					Namespace imported = ((NamespaceImport)imp).getImportedNamespace();
++					push(stack, imported);
++					if (imp.isRecursive() && imported != null) {
++						recursiveStack.push(imported);
++					}
++				} else if (imp instanceof MembershipImport) {
++					Membership membership = ((MembershipImport)imp).getImportedMembership();
++					if (membership != null) {
++						if (!addMemberNames(names, membership)) {
++							return null;
++						}
++						Element memberElement = membership.getMemberElement();
++						if (imp.isRecursive() && memberElement instanceof Namespace) {
++							push(stack, (Namespace)memberElement);
++							recursiveStack.push((Namespace)memberElement);
++						}
++					}
++				}
++			}
++		}
++		return names;
++	}
++
++	/**
++	 * Adds the names of the given Membership without computing anything that is not computed yet (in
++	 * particular the effective name of an unnamed Feature, which is derived from the Features it redefines,
++	 * including computed implicit redefinitions). Returns false if a name is not known.
++	 */
++	protected static boolean addMemberNames(Set<String> names, Membership membership) {
++		if (ACTIVE || !(membership instanceof OwningMembership)) {
++			addName(names, membership.getMemberName());
++			addName(names, membership.getMemberShortName());
++			return true;
++		}
++		Element element = ((OwningMembership)membership).getOwnedMemberElement();
++		if (element == null) {
++			return true;
++		}
++		String name = element.getDeclaredName();
++		String shortName = element.getDeclaredShortName();
++		if (name == null && shortName == null) {
++			if (element instanceof Feature) {
++				ElementAdapter adapter = ElementUtil.getElementAdapter(element);
++				if (!(adapter instanceof FeatureAdapter)) {
++					return false;
++				}
++				name = ((FeatureAdapter)adapter).getEffectiveName();
++				shortName = ((FeatureAdapter)adapter).getEffectiveShortName();
++				if (name == null && shortName == null) {
++					return false;
++				}
++			} else {
++				// The effective names of other Elements are derived without name resolution.
++				name = element.effectiveName();
++				shortName = element.effectiveShortName();
++			}
++		}
++		addName(names, name);
++		addName(names, shortName);
++		return true;
++	}
++
++	protected static void push(Deque<Namespace> stack, Namespace ns) {
++		if (ns != null) {
++			stack.push(ns);
++		}
++	}
++
++	protected static void addName(Set<String> names, String name) {
++		if (name != null) {
++			names.add(name);
++		}
++	}
++
++	// Closed Resources
++
++	protected static boolean isKnownClosed(Resource resource) {
++		ResourceState state = resource == null? null: states.get(resource);
++		return state != null && state.isClosed;
++	}
++
++	protected static boolean isClosed(Resource resource) {
++		ResourceState state = states.get(resource);
++		if (state != null && (state.isClosed ||
++				MemoKerMLScope.Stats.lookups - state.checkedAtLookup < RECHECK_INTERVAL)) {
++			return state.isClosed;
++		}
++		Set<Resource> checking = Collections.newSetFromMap(new IdentityHashMap<>());
++		boolean isClosed = check(resource, checking);
++		if (!isClosed) {
++			// Resources found closed only on the assumption that this one was closed are not closed either.
++			for (Resource checked: checking) {
++				ResourceState checkedState = states.get(checked);
++				if (checkedState != null) {
++					checkedState.isClosed = false;
++				}
++			}
++		}
++		return isClosed;
++	}
++
++	/**
++	 * A Resource is closed if none of the (non-derived) references of its contents is an unresolved proxy,
++	 * and all the Resources referenced are closed (Resources in a cycle are assumed closed while checking).
++	 */
++	protected static boolean check(Resource resource, Set<Resource> checking) {
++		ResourceState state = states.get(resource);
++		if (state != null && state.isClosed) {
++			return true;
++		}
++		if (!checking.add(resource)) {
++			return true;
++		}
++		Stats.resourceScans++;
++		state = new ResourceState();
++		state.checkedAtLookup = MemoKerMLScope.Stats.lookups;
++		states.put(resource, state);
++		Set<Resource> references = Collections.newSetFromMap(new IdentityHashMap<>());
++		boolean isClosed = scan(resource, references);
++		if (isClosed) {
++			for (Resource reference: references) {
++				if (!check(reference, checking)) {
++					isClosed = false;
++					break;
++				}
++			}
++		}
++		state.references = references;
++		state.isClosed = isClosed;
++		if (isClosed) {
++			Stats.closedResources++;
++			watch(resource);
++		}
++		return isClosed;
++	}
++
++	protected static boolean scan(Resource resource, Set<Resource> references) {
++		for (Iterator<EObject> contents = resource.getAllContents(); contents.hasNext();) {
++			EObject object = contents.next();
++			for (EReference reference: object.eClass().getEAllReferences()) {
++				if (reference.isContainment() || reference.isContainer() || reference.isDerived() ||
++						// Not marked derived, but computed from other references by each kind of Relationship,
++						// resolving them (e.g., Specialization.target gets the general).
++						reference == SysMLPackage.Literals.RELATIONSHIP__SOURCE ||
++						reference == SysMLPackage.Literals.RELATIONSHIP__TARGET) {
++					continue;
++				}
++				Object value = object.eGet(reference, false);
++				if (reference.isMany()) {
++					for (Iterator<?> values = ((InternalEList<?>)value).basicIterator(); values.hasNext();) {
++						if (!isResolved(values.next(), resource, references)) {
++							return false;
++						}
++					}
++				} else if (!isResolved(value, resource, references)) {
++					return false;
++				}
++			}
++		}
++		return true;
++	}
++
++	protected static boolean isResolved(Object value, Resource resource, Set<Resource> references) {
++		if (value instanceof EObject) {
++			EObject target = (EObject)value;
++			if (target.eIsProxy()) {
++				return false;
++			}
++			Resource targetResource = target.eResource();
++			if (targetResource != null && targetResource != resource) {
++				references.add(targetResource);
++			}
++		}
++		return true;
++	}
++
++	/**
++	 * When a Resource is unloaded or removed from its ResourceSet, the closed Resources referencing it are
++	 * no longer closed (their references become proxies).
++	 */
++	protected static void watch(Resource resource) {
++		resource.eAdapters().add(new AdapterImpl() {
++			@Override
++			public void notifyChanged(Notification notification) {
++				if (notification.getFeatureID(Resource.class) == Resource.RESOURCE__IS_LOADED && !resource.isLoaded()) {
++					released(resource);
++				}
++			}
++		});
++		ResourceSet resourceSet = resource.getResourceSet();
++		if (resourceSet != null && !resourceSet.eAdapters().contains(RESOURCE_SET_WATCHER)) {
++			resourceSet.eAdapters().add(RESOURCE_SET_WATCHER);
++		}
++	}
++
++	protected static final AdapterImpl RESOURCE_SET_WATCHER = new AdapterImpl() {
++		@Override
++		public void notifyChanged(Notification notification) {
++			if (notification.getFeatureID(ResourceSet.class) == ResourceSet.RESOURCE_SET__RESOURCES) {
++				if (notification.getEventType() == Notification.REMOVE && notification.getOldValue() instanceof Resource) {
++					released((Resource)notification.getOldValue());
++				} else if (notification.getEventType() == Notification.REMOVE_MANY ||
++						notification.getEventType() == Notification.SET) {
++					releasedAll();
++				}
++			}
++		}
++
++		@Override
++		public boolean isAdapterForType(Object type) {
++			return type == NameTables.class;
++		}
++	};
++
++	protected static void released(Resource released) {
++		ResourceState releasedState = states.remove(released);
++		if (releasedState == null || !releasedState.isClosed) {
++			// Closed Resources only reference closed Resources.
++			return;
++		}
++		// The tables of the released Resource's own Namespaces go with it, but the tables of the Namespaces
++		// of the closed Resources referencing it include names from it.
++		boolean invalidate = false;
++		for (ResourceState state: states.values()) {
++			if (state.isClosed && state.references.contains(released)) {
++				state.isClosed = false;
++				invalidate = true;
++			}
++		}
++		if (invalidate) {
++			Stats.invalidations++;
++			epoch++;
++		}
++	}
++
++	protected static void releasedAll() {
++		states.clear();
++		Stats.invalidations++;
++		epoch++;
++	}
++
++}
+diff --git a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/ElementAdapter.java b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/ElementAdapter.java
+index 7a72a26..3442ca6 100644
+--- a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/ElementAdapter.java
++++ b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/ElementAdapter.java
+@@ -22,8 +22,11 @@
+ package org.omg.sysml.adapter;
+ 
+ import java.util.UUID;
++import java.util.function.Predicate;
+ 
++import org.eclipse.emf.common.notify.Notification;
+ import org.eclipse.emf.common.notify.impl.AdapterImpl;
++import org.eclipse.emf.ecore.resource.Resource;
+ import org.omg.sysml.lang.sysml.Annotation;
+ import org.omg.sysml.lang.sysml.Element;
+ import org.omg.sysml.lang.sysml.FeatureTyping;
+@@ -55,6 +58,25 @@ public class ElementAdapter extends AdapterImpl {
+ 	public boolean isAdapterForType(Object object) {
+ 		return kind.isInstance(object);
+ 	}
++
++	// Modification Tracking
++
++	/**
++	 * The Resources whose modification is to be tracked (set by the scoping implementation, which keeps
++	 * information computed from them), and the number of (non-touch) changes notified for Elements in them.
++	 */
++	public static Predicate<Resource> isModificationTracked = null;
++	public static long trackedModificationCount = 0;
++
++	@Override
++	public void notifyChanged(Notification notification) {
++		if (!notification.isTouch() && isModificationTracked != null) {
++			Element target = getTarget();
++			if (target != null && isModificationTracked.test(target.eResource())) {
++				trackedModificationCount++;
++			}
++		}
++	}
+ 	
+ 	// Element IDs
+ 	
+diff --git a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/NamespaceAdapter.java b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/NamespaceAdapter.java
+index ae3876a..6937fbc 100644
+--- a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/NamespaceAdapter.java
++++ b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/NamespaceAdapter.java
+@@ -20,6 +20,8 @@
+ 
+ package org.omg.sysml.adapter;
+ 
++import java.util.HashMap;
++import java.util.Map;
+ import java.util.Set;
+ import java.util.UUID;
+ import java.util.stream.Collectors;
+@@ -156,6 +158,22 @@ public class NamespaceAdapter extends ElementAdapter {
+ 		super.clearCaches();
+ 		importedMembership = null;
+ 	}
++
++	// Name Resolution
++
++	/**
++	 * Results of name resolution in the local scope of the target Namespace, kept by the scoping
++	 * implementation (keys and values are opaque here). This is not cleared by clearCaches, since the
++	 * results do not depend on the derived properties cached for the target Namespace alone.
++	 */
++	private Map<Object, Object> nameResolutionCache = null;
++
++	public Map<Object, Object> getNameResolutionCache() {
++		if (nameResolutionCache == null) {
++			nameResolutionCache = new HashMap<>();
++		}
++		return nameResolutionCache;
++	}
+ 	
+ 	// Transformation
+ 	
+diff --git a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/TypeAdapter.java b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/TypeAdapter.java
+index f86acd9..d025708 100644
+--- a/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/TypeAdapter.java
++++ b/org.omg.sysml.logic/src/main/java/org/omg/sysml/adapter/TypeAdapter.java
+@@ -468,6 +468,14 @@ public class TypeAdapter extends NamespaceAdapter {
+ 	
+ 	boolean isComputeImplicitGeneralTypes = true;
+ 	
++	/**
++	 * Whether the implicit general types have been computed (or never will be), so that they can be read
++	 * with getImplicitGeneralTypeKinds and getImplicitGeneralTypesOnly without computing anything.
++	 */
++	public boolean isImplicitGeneralTypesComputed() {
++		return !isComputeImplicitGeneralTypes || getTarget().isConjugated();
++	}
++	
+ 	public void computeImplicitGeneralTypes() {
+ 		if (isComputeImplicitGeneralTypes && !getTarget().isConjugated()) {
+ 			addDefaultGeneralType();
+diff --git a/org.omg.sysml.xtext/src/org/omg/sysml/xtext/scoping/MemoSysMLScopeProvider.java b/org.omg.sysml.xtext/src/org/omg/sysml/xtext/scoping/MemoSysMLScopeProvider.java
+new file mode 100644
+index 0000000..e276ddb
+--- /dev/null
++++ b/org.omg.sysml.xtext/src/org/omg/sysml/xtext/scoping/MemoSysMLScopeProvider.java
+@@ -0,0 +1,32 @@
++/*****************************************************************************
++ * SysML 2 Pilot Implementation
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the Eclipse Public License as published by
++ * the Eclipse Foundation, version 2 of the License.
++ *
++ * @license EPL-2.0 <http://spdx.org/licenses/EPL-2.0>
++ *****************************************************************************/
++
++package org.omg.sysml.xtext.scoping;
++
++import org.eclipse.emf.ecore.EReference;
++import org.eclipse.xtext.scoping.IScope;
++import org.omg.kerml.xtext.scoping.MemoKerMLScopeProvider;
++import org.omg.sysml.lang.sysml.Element;
++import org.omg.sysml.lang.sysml.Namespace;
++
++/**
++ * A SysMLScopeProvider whose scopes are MemoKerMLScopes.
++ */
++public class MemoSysMLScopeProvider extends SysMLScopeProvider {
++
++	@Override
++	public IScope scopeFor(Namespace pack, EReference reference, Element element, boolean isInsideScope,
++			boolean isFirstScope, boolean isRedefinition, Element skip) {
++		return MemoKerMLScopeProvider.memoScopeFor(this,
++				super.scopeFor(pack, reference, element, isInsideScope, isFirstScope, isRedefinition, skip),
++				pack, reference, element, isInsideScope, isFirstScope, isRedefinition, skip);
++	}
++
++}
