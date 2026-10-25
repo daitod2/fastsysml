@@ -13,7 +13,7 @@ import re
 import shlex
 import sqlite3
 import threading
-from typing import Any, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Iterable, List, Optional, Sequence, Set, Tuple
 
 from .graph import Graph, Node
 
@@ -50,6 +50,8 @@ class SearchIndex:
             self.has_fts = True
         except sqlite3.OperationalError:  # SQLite without FTS5 or the trigram tokenizer (before 3.34).
             self.has_fts = False
+        # The kinds of the edges (also fields of a query).
+        self.kinds: Set[str] = set()
         self._db.executemany("INSERT INTO metaclasses VALUES (?, ?)",
                              [(name, general) for name, generals in graph._supertypes.items()
                               for general in generals])
@@ -68,6 +70,7 @@ class SearchIndex:
                 self._db.executemany("DELETE FROM nodes_text WHERE key = ?", keys)
                 self._db.executemany("INSERT INTO nodes_text VALUES (?, ?, ?, ?, ?, ?)",
                                      [(row[0], row[2], row[4], row[9], row[10], row[11]) for row in rows])
+            self.kinds = {e.kind for e in self.graph.edges}
             self._db.execute("DELETE FROM edges")
             self._db.executemany("INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)",
                                  [(e.kind, e.source.key, e.target.key if e.target is not None else None, e.via,
@@ -85,12 +88,19 @@ class SearchIndex:
           in:Vehicle::Parts   inside the namespace with this qualified name (or ending with it)
           meta:Safety      with this metadata
           file:Vehicle     in a file whose URI contains this
+          typing:P::Engine with an edge of this kind (any kind of edge) to the node with this qualified name
+                           (or name; case-insensitive), e.g. the usages of P::Engine
         Stub nodes (referenced but not loaded) are excluded unless stubs=True."""
         conditions: List[str] = []
         params: List[Any] = []
         name_terms: List[str] = []
         for token in _split(query):
             field, _, value = token.partition(":")
+            if field in self.kinds and value and not value.startswith(":"):
+                conditions.append("key IN (SELECT e.source FROM edges e JOIN nodes t ON t.key = e.target "
+                                  "WHERE e.kind = ? AND (t.qualified_name = ? OR lower(t.name) = lower(?)))")
+                params += [field, value, value]
+                continue
             if field in FIELDS and value and not value.startswith(":"):
                 if field == "type":
                     conditions.append("metaclass IN (SELECT metaclass FROM metaclasses WHERE general = ?)")

@@ -15,6 +15,7 @@ qualified name only.
 from __future__ import annotations
 
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple, Union
+from urllib.parse import unquote
 
 from ..model import Element, External, Model, Unresolved
 
@@ -110,7 +111,7 @@ class Node:
         if self.qualified_name:
             return self.qualified_name.rsplit("::", 1)[-1]
         if self.owner is None and self.metaclass == "Namespace":
-            return self.model_uri.rsplit("/", 1)[-1]  # The root of a file.
+            return unquote(self.model_uri.rsplit("/", 1)[-1])  # The root of a file.
         text = (self.attributes.get("body") or self.text or "").strip()
         if text:
             line = " ".join(text.split())

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SysML ブラウザ</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">SysML ブラウザ</div>
+  <div class="nav">
+    <button id="back" type="button" title="戻る（Alt+←）" aria-label="戻る">←</button>
+    <button id="forward" type="button" title="進む（Alt+→）" aria-label="進む">→</button>
+  </div>
+  <div class="search">
+    <input id="search" type="search" placeholder="検索（例：type:PartUsage wheel）　/ で移動" autocomplete="off"
+           spellcheck="false" aria-label="検索">
+    <button id="help-button" type="button" aria-expanded="false">書き方</button>
+    <div id="help" class="popover" hidden></div>
+  </div>
+  <div class="right">
+    <span id="status"></span>
+    <button id="issues-button" type="button"></button>
+    <button id="reload" type="button" title="ファイルを読み込み直す">再読み込み</button>
+  </div>
+</header>
+<main>
+  <aside id="sidebar">
+    <div class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="types" aria-selected="true">種類</button>
+      <button type="button" role="tab" data-tab="tree" aria-selected="false">ツリー</button>
+    </div>
+    <div id="types" class="pane"></div>
+    <div id="tree" class="pane" hidden></div>
+  </aside>
+  <section id="list" aria-label="一覧"></section>
+  <section id="detail" aria-label="詳細"></section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
