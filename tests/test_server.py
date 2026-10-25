@@ -1,9 +1,12 @@
 """Tests of the browser's server (fastsysml.browser.server): its API, and the page served over HTTP."""
 
 import json
+import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
+from pathlib import Path
 from urllib.parse import quote
 
 from fastsysml import SysMLParser
@@ -100,6 +103,35 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(issue["node"]["label"], "broken")
         self.assertEqual(issue["file"], "p.sysml")
 
+    def test_open_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "a.sysml").write_text("package A { part def T; }", encoding="utf-8")
+            (root / "sub").mkdir()
+            (root / "sub" / "b.sysml").write_text("package B { private import A::*; part t : T; }",
+                                                  encoding="utf-8")
+            (root / "notes.txt").write_text("not a model", encoding="utf-8")
+            # (Its own workspace: opening files unloads the inputs of the parser, which this one shares.)
+            with Workspace(self.parser) as ws:
+                app = BrowserApp(ws, root)
+                status, _, body = app.get("/api/files", {})
+                files = json.loads(body)
+                self.assertEqual((files["files"], files["loaded"]), (["a.sysml", "sub/b.sysml"], []))
+                status, _, body = app.post("/api/open", {"paths": ["a.sysml", "sub/b.sysml"]})
+                self.assertEqual(status, 200, body)
+                info = json.loads(body)
+                self.assertEqual((info["loaded"], info["errors"]), (["a.sysml", "sub/b.sysml"], 0))
+                status, _, body = app.post("/api/open", {"paths": ["sub/b.sysml"]})  # Instead (A is not loaded).
+                self.assertEqual(json.loads(body)["loaded"], ["sub/b.sysml"])
+                self.assertEqual(json.loads(app.get("/api/files", {})[2])["loaded"], ["sub/b.sysml"])
+                for paths in (["../a.sysml"], ["notes.txt"], ["missing.sysml"], []):
+                    status, _, body = app.post("/api/open", {"paths": paths})
+                    self.assertEqual(status, 400, (paths, body))
+                # Not a file of the library either.
+                library = next(self.parser.library.rglob("*.sysml"))
+                self.assertIsNone(BrowserApp(ws, self.parser.library.parent)._file(
+                    library.relative_to(self.parser.library.parent).as_posix()))
+
     def test_http(self):
         server = make_server(self.ws, port=0)
         threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -114,6 +146,21 @@ class ServerTest(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as error:
                 urllib.request.urlopen(base + "../pyproject.toml")
             self.assertEqual(error.exception.code, 404)
+            error.exception.close()
+            # A POST with a body must be JSON (a form of another site cannot send it).
+            form = urllib.request.Request(base + "api/open", data=b"paths=a.sysml", method="POST",
+                                          headers={"Content-Type": "application/x-www-form-urlencoded"})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(form)
+            self.assertEqual(error.exception.code, 415)
+            error.exception.close()
+            # Without a root directory, no files can be opened.
+            request = urllib.request.Request(base + "api/open", data=b'{"paths": ["p.sysml"]}', method="POST",
+                                             headers={"Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(request)
+            self.assertEqual(error.exception.code, 400)
+            error.exception.close()
         finally:
             server.shutdown()
             server.server_close()

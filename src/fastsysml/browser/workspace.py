@@ -59,15 +59,19 @@ class Workspace:
         self._add([model])
         return model
 
-    def reload(self, validate: bool = True) -> List[Model]:
-        """Loads the files again (after they changed). The models loaded from text are dropped."""
-        paths = self.paths
+    def open(self, paths: Iterable[Union[str, os.PathLike]], validate: bool = True) -> List[Model]:
+        """Loads files instead of those loaded (and of the models loaded from text)."""
+        paths = [os.fspath(path) for path in paths]
         self.parser.unload()
         self.graph = Graph(self.parser.metaclasses())
         self.index.close()
         self.index = SearchIndex(self.graph, self.translator)
         self.models, self.paths = [], []
-        return self.load(paths, validate=validate)
+        return self.load(paths, validate=validate) if paths else []
+
+    def reload(self, validate: bool = True) -> List[Model]:
+        """Loads the files again (after they changed). The models loaded from text are dropped."""
+        return self.open(self.paths, validate=validate)
 
     def _add(self, models: Sequence[Model]) -> List[Node]:
         added: List[Node] = []

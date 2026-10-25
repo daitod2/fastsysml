@@ -12,7 +12,10 @@ API (GET, except reload; with lang=en, without the translations of the workspace
                             then "fetched" is true)
   /api/children?key=...     the children of a node (without key: the roots of the files)
   /api/issues               all the issues, with their nodes
+  /api/files                the .sysml and .kerml files that can be opened (under the root directory), and those
+                            loaded
   POST /api/reload          loads the files again
+  POST /api/open            loads other files instead, {"paths": [paths relative to the root]} (application/json)
 It listens on localhost only. With translations, labels and texts are translated, with the original as
 "original" (and "docOriginal").
 """
@@ -23,6 +26,7 @@ import csv
 import io
 import json
 import mimetypes
+import os
 import threading
 import webbrowser
 from http import HTTPStatus
@@ -44,14 +48,17 @@ GROUPS = ("Package", "Definition", "Usage", "Relationship", "AnnotatingElement",
 COLUMNS = ("label", "original", "metaclass", "owner", "typing", "subclassification", "redefinition", "subsetting",
            "reference", "usages", "multiplicity", "value", "doc", "file", "line")
 MAX_ROWS = 5000
+MAX_FILES = 5000
 MAX_CHILDREN = 1000
 
 
 class BrowserApp:
     """Answers the requests of the API from a workspace (one request at a time)."""
 
-    def __init__(self, workspace: Workspace):
+    def __init__(self, workspace: Workspace, root: Optional[Path] = None):
+        """root: the directory whose files can be opened (none if None)."""
         self.ws = workspace
+        self.root = root.resolve() if root is not None else None
         self.lock = threading.RLock()
         # The translator of the request (that of the workspace, unless the request asks for another language).
         self.tr: Optional[Translator] = None
@@ -93,14 +100,68 @@ class BrowserApp:
                 return _json([self.summary(child, children=True) for child in node.children[:MAX_CHILDREN]])
             if path == "/api/issues":
                 return _json(self.issues())
+            if path == "/api/files":
+                return _json(self.files())
         return _json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
-    def post(self, path: str) -> Tuple[int, str, bytes]:
+    def post(self, path: str, body: Any = None) -> Tuple[int, str, bytes]:
         with self.lock:
+            self.tr = self.ws.translator
             if path == "/api/reload":
                 self.ws.reload()
                 return _json(self.info())
+            if path == "/api/open":
+                if self.root is None:
+                    return _json({"error": "no root directory to open files from"}, HTTPStatus.BAD_REQUEST)
+                paths = body.get("paths") if isinstance(body, dict) else None
+                if not isinstance(paths, list) or not paths:
+                    return _json({"error": "paths expected"}, HTTPStatus.BAD_REQUEST)
+                files = []
+                for name in paths:
+                    file = self._file(name)
+                    if file is None:
+                        return _json({"error": f"not a file that can be opened: {name}"}, HTTPStatus.BAD_REQUEST)
+                    files.append(file)
+                self.ws.open(files)
+                return _json(self.info())
         return _json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    # Files
+
+    def _openable(self, file: Path) -> bool:
+        """A model file under the root, but not of a library (the one used is loaded already; another copy, e.g.
+        sysml.library of the release, would define the same elements again)."""
+        if self.root is None or file.suffix not in (".sysml", ".kerml") or not file.is_file():
+            return False
+        if not _is_under(file, self.root) or _is_under(file, self.ws.parser.library.resolve()):
+            return False
+        return not any(part.endswith(".library") for part in file.relative_to(self.root).parts[:-1])
+
+    def _file(self, name: Any) -> Optional[Path]:
+        if not isinstance(name, str) or self.root is None:
+            return None
+        file = (self.root / name).resolve()
+        return file if self._openable(file) else None
+
+    def _relative(self, file: str) -> str:
+        path = Path(file).resolve()
+        if self.root is not None and _is_under(path, self.root):
+            return path.relative_to(self.root).as_posix()
+        return path.as_posix()
+
+    def files(self) -> Dict[str, Any]:
+        files: List[str] = []
+        if self.root is not None:
+            for directory, names, file_names in os.walk(self.root):
+                names[:] = sorted(name for name in names if not name.startswith(".") and not name.endswith(".library"))
+                for name in sorted(file_names):
+                    file = (Path(directory) / name).resolve()
+                    if self._openable(file):
+                        files.append(file.relative_to(self.root).as_posix())
+                if len(files) > MAX_FILES:
+                    break
+        return {"root": str(self.root) if self.root is not None else None, "files": files[:MAX_FILES],
+                "loaded": [self._relative(path) for path in self.ws.paths]}
 
     # Answers
 
@@ -108,6 +169,8 @@ class BrowserApp:
         nodes = [node for node in self.ws.graph.nodes.values() if not node.stub]
         issues = self.ws.issues
         return {"files": [_file_name(root.model_uri) for root in self.ws.roots], "nodes": len(nodes),
+                "root": str(self.root) if self.root is not None else None,
+                "loaded": [self._relative(path) for path in self.ws.paths],
                 "stubs": len(self.ws.graph.nodes) - len(nodes), "edges": len(self.ws.graph.edges),
                 "errors": sum(1 for issue in issues if issue.severity == "error"), "issues": len(issues),
                 "language": self.ws.translator.language if self.ws.translator is not None else None}
@@ -214,6 +277,14 @@ class BrowserApp:
                 else None}
 
 
+def _is_under(path: Path, directory: Path) -> bool:
+    try:
+        path.relative_to(directory)
+        return True
+    except ValueError:
+        return False
+
+
 def _file_name(uri: str) -> str:
     return unquote(uri.rsplit("/", 1)[-1])
 
@@ -255,8 +326,16 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         url = urlparse(self.path)
+        body = None
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            # Only JSON (which a page of another site cannot send here without the server allowing it).
+            if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                self._send(*_json({"error": "application/json expected"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE))
+                return
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
         try:
-            self._send(*self.app.post(url.path))
+            self._send(*self.app.post(url.path, body))
         except Exception as e:
             self._send(*_json({"error": f"{type(e).__name__}: {e}"}, HTTPStatus.INTERNAL_SERVER_ERROR))
 
@@ -272,15 +351,17 @@ class _Handler(BaseHTTPRequestHandler):
         pass  # Quiet.
 
 
-def make_server(workspace: Workspace, port: int = 8765, host: str = "127.0.0.1") -> ThreadingHTTPServer:
-    """A server for a workspace (call serve_forever(); port 0 picks a free port: server.server_address)."""
-    handler = type("Handler", (_Handler,), {"app": BrowserApp(workspace)})
+def make_server(workspace: Workspace, port: int = 8765, host: str = "127.0.0.1",
+                root: Optional[Path] = None) -> ThreadingHTTPServer:
+    """A server for a workspace (call serve_forever(); port 0 picks a free port: server.server_address). With a
+    root directory, its files can be opened from the page."""
+    handler = type("Handler", (_Handler,), {"app": BrowserApp(workspace, root)})
     return ThreadingHTTPServer((host, port), handler)
 
 
-def serve(workspace: Workspace, port: int = 8765, open_browser: bool = True) -> None:
+def serve(workspace: Workspace, port: int = 8765, open_browser: bool = True, root: Optional[Path] = None) -> None:
     """Serves a workspace until interrupted (Ctrl+C), opening the page in a web browser."""
-    server = make_server(workspace, port)
+    server = make_server(workspace, port, root=root)
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"Browsing at {url} (Ctrl+C to stop)", flush=True)
     if open_browser:

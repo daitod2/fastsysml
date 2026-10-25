@@ -9,6 +9,7 @@
 <body>
 <header class="top">
   <div class="brand">SysML ブラウザ</div>
+  <button id="files-button" type="button" title="表示するファイルを選ぶ" hidden>ファイル</button>
   <div class="nav">
     <button id="back" type="button" title="戻る（Alt+←）" aria-label="戻る">←</button>
     <button id="forward" type="button" title="進む（Alt+→）" aria-label="進む">→</button>
@@ -38,6 +39,16 @@
   <section id="list" aria-label="一覧"></section>
   <section id="detail" aria-label="詳細"></section>
 </main>
+<dialog id="files-dialog" aria-labelledby="files-title">
+  <div class="dialog-head">
+    <h2 id="files-title">表示するファイル</h2>
+    <button type="button" id="files-close" aria-label="閉じる">×</button>
+  </div>
+  <p class="dialog-note">ファイル名をクリックするとそのファイルだけを、「フォルダごと開く」でフォルダの中のファイルをまとめて開きます（互いに参照するファイルは、まとめて開いてください）。</p>
+  <input id="files-filter" type="search" placeholder="ファイル名で絞り込む" aria-label="ファイル名で絞り込む">
+  <div id="files-status" class="dialog-note" role="status"></div>
+  <div id="files-list"></div>
+</dialog>
 <script src="app.js"></script>
 </body>
 </html>

@@ -65,6 +65,11 @@ class SysMLParser:
         """Startup information (mode and times in ms)."""
         return self._bridge.startup
 
+    @property
+    def library(self) -> Path:
+        """The directory of the library used."""
+        return Path(self._bridge.library)
+
     def parse(self, text: str, name: str = "input.sysml", **options: Any) -> Model:
         """Parses text. The extension of name (.sysml or .kerml) selects the language."""
         return self.parse_many([{"text": text, "name": name}], **options)[0]

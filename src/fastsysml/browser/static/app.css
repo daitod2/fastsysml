@@ -120,6 +120,46 @@ code, pre, .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "BIZ UD
 .popover td { padding: 3px 6px; vertical-align: top; }
 .popover td:first-child { white-space: nowrap; }
 
+/* Files */
+#files-button { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog#files-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(80vh, 900px);
+  padding: 16px 20px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+}
+dialog#files-dialog[open] { display: flex; }
+dialog#files-dialog::backdrop { background: rgba(0, 0, 0, 0.35); }
+.dialog-head { display: flex; justify-content: space-between; align-items: center; }
+.dialog-head h2 { margin: 0; font-size: 16px; }
+.dialog-note { margin: 0; color: var(--text-soft); font-size: 13px; }
+#files-list { overflow: auto; min-height: 120px; border: 1px solid var(--border); border-radius: 6px; }
+.folder-row {
+  position: sticky;
+  top: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: var(--bg-soft);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.folder-row button { font-size: 12px; padding: 0 8px; font-weight: normal; }
+.file-row { display: flex; gap: 8px; padding: 2px 10px 2px 22px; cursor: pointer; }
+.file-row:hover { background: var(--bg-hover); }
+.file-row.loaded { background: var(--bg-selected); }
+.file-row.loaded::after { content: "表示中"; margin-left: auto; color: var(--text-soft); font-size: 12px; }
+#files-list.busy { opacity: 0.5; pointer-events: none; }
+
 /* Layout */
 main {
   flex: 1;

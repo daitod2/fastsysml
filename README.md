@@ -135,6 +135,7 @@ print(library.roots[0].type, library.owner)                     # DataType Exter
 
 ```bash
 python -m fastsysml browse Vehicle.sysml          # 複数のファイルも指定できる
+python -m fastsysml browse SysML-v2-Release/sysml/src   # フォルダを指定すると、その中から画面で選んで開く
 ```
 
 ファイルを読み込むと（名前解決と検証まで行います）、ローカルのサーバーが `http://127.0.0.1:8765/` で起動し、ブラウザが開きます。外部のライブラリは使っていません。
@@ -154,7 +155,13 @@ python -m fastsysml browse Vehicle.sysml          # 複数のファイルも指�
   - ライブラリの要素は、開いたときにブリッジから取得します。
 - **URL**：選んだ要素と検索条件は URL に入るので、ブラウザの戻る・進む、リンクの共有、ブックマークができます。
 
-オプションは、`--port`（0 なら空いているポート）、`--no-open`（ブラウザを開かない）、`--no-validate`、`--mode`、`--lang`（下の「訳を重ねて表示する」）です。Python から使うときは、`fastsysml.browser.server.serve(workspace)` を呼びます。
+ヘッダーの「ファイル」ボタンで、表示するファイルを切り替えられます。
+
+- 選べるのは、起動時に指定したフォルダ（`--root`）の中の .sysml と .kerml のファイルです。`--root` を省略した場合は、指定したフォルダ、またはファイルのあるフォルダになります。
+- ファイル名をクリックするとそのファイルだけを、「フォルダごと開く」でフォルダの中のファイルをまとめて開きます。互いに参照するファイル（例：Vehicle Example の4ファイル）は、フォルダごと開いてください。
+- `*.library` という名前のフォルダ（SysML v2 Release の `sysml.library` など）は選べません。標準ライブラリはすでに読み込まれているからです。
+
+オプションは、`--port`（0 なら空いているポート）、`--root`、`--no-open`（ブラウザを開かない）、`--no-validate`、`--mode`、`--lang`（下の「訳を重ねて表示する」）です。Python から使うときは、`fastsysml.browser.server.serve(workspace)` を呼びます。
 
 ### 訳を重ねて表示する
 

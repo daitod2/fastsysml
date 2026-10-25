@@ -44,11 +44,16 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
-async function api(path, params, method) {
+async function api(path, params, method, body) {
   const url = new URL(path, location.href);
   for (const [name, value] of Object.entries(params || {})) url.searchParams.set(name, value);
   if (!url.searchParams.has("lang")) url.searchParams.set("lang", lang);
-  const response = await fetch(url, { method: method || "GET" });
+  const options = { method: method || "GET" };
+  if (body !== undefined) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  const response = await fetch(url, options);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || response.statusText);
   return data;
@@ -124,9 +129,81 @@ async function loadInfo() {
   button.dataset.language = info.language || "";
   $("#status").textContent = `ファイル ${info.files.length}・要素 ${info.nodes}・関係 ${info.edges}`;
   $("#status").title = info.files.join("\n");
+  const files = $("#files-button");
+  files.hidden = !info.root;
+  files.textContent = !info.loaded.length ? "ファイルを選ぶ"
+    : info.loaded.length === 1 ? `ファイル：${info.loaded[0].split("/").pop()}`
+    : `ファイル：${commonFolder(info.loaded)}（${info.loaded.length}）`;
+  files.title = ["表示するファイルを選ぶ"].concat(info.loaded).join("\n");
   const issues = $("#issues-button");
   issues.textContent = info.issues ? `エラー ${info.errors}・指摘 ${info.issues - info.errors}` : "指摘なし";
   issues.classList.toggle("has-errors", info.errors > 0);
+  return info;
+}
+
+// Files (a dialog to choose the files shown, among those of the root directory of the server)
+
+let fileList = null;
+
+function commonFolder(paths) {
+  const folders = paths.map((path) => path.split("/").slice(0, -1));
+  const common = [];
+  for (let i = 0; folders.every((folder) => i < folder.length && folder[i] === folders[0][i]); i++) {
+    common.push(folders[0][i]);
+  }
+  return common.length ? common[common.length - 1] : "…";
+}
+
+async function showFiles() {
+  const dialog = $("#files-dialog");
+  if (!dialog.open) dialog.showModal();
+  $("#files-status").textContent = "読み込み中…";
+  fileList = await api("api/files");
+  $("#files-status").textContent = `${fileList.root}（${fileList.files.length} ファイル）`;
+  renderFiles();
+  $("#files-filter").focus();
+}
+
+function renderFiles() {
+  const filter = $("#files-filter").value.trim().toLowerCase();
+  const loaded = new Set(fileList.loaded);
+  const folders = new Map();
+  for (const path of fileList.files) {
+    if (filter && !path.toLowerCase().includes(filter)) continue;
+    const folder = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".";
+    if (!folders.has(folder)) folders.set(folder, []);
+    folders.get(folder).push(path);
+  }
+  const rows = [];
+  for (const [folder, paths] of folders) {
+    const all = fileList.files.filter((path) => (path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ".") === folder);
+    rows.push(h("div", { class: "folder-row" }, h("span", null, folder, " ", h("span", { class: "count" }, all.length)),
+      h("button", { type: "button", onclick: () => openFiles(all) }, "フォルダごと開く")));
+    for (const path of paths) {
+      rows.push(h("div", { class: "file-row" + (loaded.has(path) ? " loaded" : ""), role: "button", tabindex: "0",
+                           title: path, onclick: () => openFiles([path]),
+                           onkeydown: (event) => { if (event.key === "Enter") openFiles([path]); } },
+        path.split("/").pop()));
+    }
+  }
+  $("#files-list").replaceChildren(...(rows.length ? rows : [h("div", { class: "empty" }, "該当するファイルはありません。")]));
+}
+
+async function openFiles(paths) {
+  const list = $("#files-list");
+  list.classList.add("busy");
+  $("#files-status").textContent = `${paths.length} ファイルを読み込み中…`;
+  try {
+    await api("api/open", null, "POST", { paths });
+    $("#files-dialog").close();
+    // The elements of other files are gone: keep the query, not the element.
+    history.pushState(null, "", hashOf({ q: current.q, v: current.v }));
+    await setLanguage(lang);
+  } catch (error) {
+    $("#files-status").textContent = `読み込めませんでした：${error.message || error}`;
+  } finally {
+    list.classList.remove("busy");
+  }
 }
 
 function renderHelp() {
@@ -540,6 +617,9 @@ function setup() {
   $("#lang-button").addEventListener("click", () => {
     setLanguage(lang === "en" ? $("#lang-button").dataset.language : "en");
   });
+  $("#files-button").addEventListener("click", showFiles);
+  $("#files-close").addEventListener("click", () => $("#files-dialog").close());
+  $("#files-filter").addEventListener("input", renderFiles);
   renderHelp();
   start();
 }
@@ -550,6 +630,7 @@ async function start() {
   try { stored = localStorage.getItem("sysml-browser-lang"); } catch (error) { /* (No storage.) */ }
   lang = info.language && stored !== "en" ? info.language : "en";
   await setLanguage(lang);
+  if (info.root && !info.loaded.length) showFiles(); // Nothing to show yet.
 }
 
 let languageRequest = 0;

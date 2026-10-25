@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 
@@ -22,7 +23,8 @@ def main(argv=None) -> int:
     parse.add_argument("--validate", action="store_true")
     parse.add_argument("--mode", choices=("patched", "userside", "plain"), default="patched")
     browse = commands.add_parser("browse", help="browse files in a web browser (a local server)")
-    browse.add_argument("files", nargs="+")
+    browse.add_argument("files", nargs="*", help="files to load, or a directory whose files can be opened on the page")
+    browse.add_argument("--root", help="the directory whose files can be opened on the page (default: that of the files)")
     browse.add_argument("--port", type=int, default=8765, help="the port to listen on, on localhost (0: any free one)")
     browse.add_argument("--no-open", dest="open", action="store_false", help="do not open a web browser")
     browse.add_argument("--no-validate", dest="validate", action="store_false", help="do not run the validation")
@@ -47,10 +49,22 @@ def main(argv=None) -> int:
     elif args.command == "browse":
         from .browser import Workspace
         from .browser.server import serve
+        from pathlib import Path
+        directories = [Path(name) for name in args.files if Path(name).is_dir()]
+        files = [Path(name) for name in args.files if not Path(name).is_dir()]
+        if args.root:
+            root = Path(args.root)
+        elif directories:
+            root = directories[0]
+        elif files:
+            root = Path(os.path.commonpath([str(file.resolve().parent) for file in files]))
+        else:
+            parser.error("browse: give files, a directory or --root")
         with Workspace(mode=args.mode, language=args.lang) as workspace:
-            print(f"Loading {len(args.files)} file(s)...", flush=True)
-            workspace.load(args.files, validate=args.validate)
-            serve(workspace, args.port, args.open)
+            if files:
+                print(f"Loading {len(files)} file(s)...", flush=True)
+                workspace.load(files, validate=args.validate)
+            serve(workspace, args.port, args.open, root=root)
     return 0
 
 

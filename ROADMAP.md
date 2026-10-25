@@ -16,6 +16,7 @@
   - JSON API：`server.py`（`http.server`、localhost のみ）。画面は `static/` にあり、外部のライブラリは使っていません。
   - 検索に、辺の種類の欄（例：`typing:P::Engine`）を加えました。
   - 画面の語は `static/app.js` の `TERMS` と `term()` にまとめてあります。日本語化のときは、ここに用語集を入れます。
+- [x] **表示するファイルの切り替え**（2026-10-25）：ヘッダーの「ファイル」ボタンで、`--root` の中のファイルやフォルダを選んで開き直す（`/api/files`、`POST /api/open`）
 - [ ] **第3段階：追加の機能**
   - 周辺のグラフ：Cytoscape.js を同梱し、クリックで展開できるようにします。
   - PlantUML の図のタブ：jar に含まれている pilot の SysML2PlantUML を使い、smetana で Graphviz なしに描けるかを確認します。
